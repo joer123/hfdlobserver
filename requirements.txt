@@ -1,0 +1,6 @@
+click
+numpy
+pyyaml
+requests
+rich
+whiptail-dialogs

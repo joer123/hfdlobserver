@@ -1,0 +1,6 @@
+# use this if you want to keep a separate error log. Not normally needed. Rotates daily.
+# LOG_OPTIONS="--log path/to/logfile"
+# use this if you keep the settings file in a different location than the entry shell script.
+# CONFIG_OPTIONS="--config path/to/settings.yaml"
+# use this if you want additional logging information
+# DEBUG_OPTIONS="--debug"

@@ -1,0 +1,9 @@
+log
+.env*
+.venv
+.mypy_cache
+.pytest_cache
+settings.yaml
+settings.yaml.new
+settings.yaml.safe
+*.state
