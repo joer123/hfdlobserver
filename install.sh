@@ -14,43 +14,51 @@ pip install -r requirements.txt
 pushd $HOME
 
 # download kiwiclient
-git clone https://github.com/jks-prv/kiwiclient.git
+if [[ -r kiwiclient/kiwirecorder.py ]] ; then
+    echo "kiwirecorder is already available, not fetching"
+else
+    git clone https://github.com/jks-prv/kiwiclient.git
+fi
 
 # download and install dumphfdl
 # dependencies
-sudo apt install -y \
-    build-essential cmake pkg-config libglib2.0-dev libconfig++-dev libliquid-dev libfftw3-dev \
-    zlib1g-dev libxml2-dev libjansson-dev
+if ( which dumphfdl ) then
+    echo "dumphfdl appears to be installed. Skipping build."
+else
+    sudo apt install -y \
+        build-essential cmake pkg-config libglib2.0-dev libconfig++-dev libliquid-dev libfftw3-dev \
+        zlib1g-dev libxml2-dev libjansson-dev
 
-# libacars
-git clone https://github.com/szpajder/libacars
-pushd libacars \
-&& mkdir build \
-&& cd build \
-&& cmake ../
-make \
-&& sudo make install \
-&& sudo ldconfig
-popd
+    # libacars
+    git clone https://github.com/szpajder/libacars
+    pushd libacars \
+    && mkdir build \
+    && cd build \
+    && cmake ../
+    make \
+    && sudo make install \
+    && sudo ldconfig
+    popd
 
-# libstatsd
-git clone https://github.com/romanbsd/statsd-c-client.git
-pushd statsd-c-client \
-make \
-&& sudo make install \
-&& sudo ldconfig
-popd
+    # libstatsd
+    git clone https://github.com/romanbsd/statsd-c-client.git
+    pushd statsd-c-client \
+    make \
+    && sudo make install \
+    && sudo ldconfig
+    popd
 
-# dumphfdl
-git clone https://github.com/szpajder/dumphfdl
-pushd dumphfdl
-mkdir build \
-&& cd build \
-&& cmake ../
-make \
-&& sudo make install \
-&& sudo ldconfig
-popd
+    # dumphfdl
+    git clone https://github.com/szpajder/dumphfdl
+    pushd dumphfdl
+    mkdir build \
+    && cd build \
+    && cmake ../
+    make \
+    && sudo make install \
+    && sudo ldconfig
+    popd
+fi
 
 # ask questions for settings.yaml
 # 1. Stations:
@@ -62,7 +70,9 @@ popd
 # 4. Address and Port for Web-888.
 python3 configure.py
 # Write settings file
-cp -i settings.yaml.new settings.yaml
+if [[ -r settings.yaml.new ]] ; then
+    cp -i settings.yaml.new settings.yaml
+fi
 # TODO: Write service file?
 # good to go.
 python3 - << EOF
