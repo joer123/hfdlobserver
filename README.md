@@ -36,6 +36,8 @@ Processing the entire HF frequency space would be very CPU-intensive. Taking adv
 
 HFDL.observer/888 also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
 
+![image](https://github.com/user-attachments/assets/962b948f-af89-4a46-8512-bddaf7764d0a)
+
 This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
 
 ## Setting up the Web-888
