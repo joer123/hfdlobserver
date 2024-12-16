@@ -144,6 +144,10 @@ $ extras/install-service.sh
 
 It then becomes a normal service named `hfdlobserver888`. Following the usual pattern, there is a very minor ability to configure it via `/etc/default/hfdlobserver888`, but most items are managed through the `settings.yaml` file.
 
+## Implementation Notes
+
+The internal structure of HFDL.observer/888 is more complicated than it strictly needs to be. Much of this is derived from the desire to be fairly decoupled internall for future reuse. This project started as a less well defined desire to orchestrate a variety of different SDRs in sample HFDL frequencies, and it may be expanded to deal with less homogenous virtual receivers in the future. It should also abstract well to handling remote receivers, plus remote status and management (even later).
+
 ## Acknowledgements
 
 - [dumphfdl](https://github.com/szpajder/dumphfdl) - an excellent decoder of HFDL signals
