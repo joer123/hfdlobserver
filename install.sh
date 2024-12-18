@@ -9,62 +9,71 @@ pushd $HOME
 VENV="$HOME/.virtualenvs/hfdlobserver888"
 python -m venv "${VENV}"
 source "${VENV}/bin/activate"
-popd
 pip install -r requirements.txt
-pushd $HOME
 
-# download kiwiclient
+# download kiwiclient if needed
 if [[ -r kiwiclient/kiwirecorder.py ]] ; then
     echo "kiwirecorder is already available, not fetching"
 else
     git clone https://github.com/jks-prv/kiwiclient.git
 fi
 
-# download and install dumphfdl
-# dependencies
+# download and install dumphfdl if needed
 if ( which dumphfdl ) then
     echo "dumphfdl appears to be installed. Skipping build."
 else
+    # dependencies
     sudo apt install -y \
         build-essential cmake pkg-config libglib2.0-dev libconfig++-dev libliquid-dev libfftw3-dev \
-        zlib1g-dev libxml2-dev libjansson-dev
+        zlib1g-dev libxml2-dev libjansson-dev \
+    || exit -1
 
     # libacars
-    git clone https://github.com/szpajder/libacars
-    pushd libacars \
-    && mkdir build \
+    ( [[ -d libacars ]] || git clone https://github.com/szpajder/libacars ) \
+    && pushd libacars \
+    && ( [[ -d build ]] || mkdir build )\
     && cd build \
-    && cmake ../
-    make \
+    && cmake ../ \
+    && make \
     && sudo make install \
-    && sudo ldconfig
-    popd
+    && sudo ldconfig \
+    && popd
+    if [[ $? != 0 ]] ; then
+        echo 'libacars install failed; bailing.'
+        exit -1
+    fi
 
     # libstatsd
-    git clone https://github.com/romanbsd/statsd-c-client.git
-    pushd statsd-c-client \
-    make \
+    ( [[ -d statsd-client ]] || git clone https://github.com/romanbsd/statsd-c-client.git ) \
+    && pushd statsd-c-client \
+    && make \
     && sudo make install \
-    && sudo ldconfig
-    popd
+    && sudo ldconfig \
+    && popd
+    if [[ $? != 0 ]] ; then
+        echo 'statsd-c-client install failed. Statsd will not be available'
+    fi
 
     # dumphfdl
-    git clone https://github.com/szpajder/dumphfdl
-    pushd dumphfdl
-    mkdir build \
+    ( [[ -d dumphfdl ]] || git clone https://github.com/szpajder/dumphfdl ) \
+    && pushd dumphfdl \
+    && ( [[ -d build ]] || mkdir build )\
     && cd build \
-    && cmake ../
-    make \
+    && cmake ../ \
+    && make \
     && sudo make install \
-    && sudo ldconfig
-    popd
+    && sudo ldconfig \
+    && popd
+    if [[ $? != 0 ]] ; then
+        echo 'dumphfdl install failed; bailing.'
+        exit -1
+    fi
 fi
 
 # ask questions for settings.yaml
 # 1. Stations:
 #   A. provide a list
 #   B. provide lat/long, and produce a list
-
 # 2. Select directory for packet logging (or disable)
 # 3. Airframes Station ID
 # 4. Address and Port for Web-888.
@@ -93,4 +102,3 @@ To install HFDL.observer/888 as a service, run the 'extras/install-service.sh' s
 EOF
 
 deactivate  # deactivate Venv for now.
-# popd
