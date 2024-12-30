@@ -86,6 +86,7 @@ class Observer888(hfdl_observer.bus.Publisher):
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         self.publish('packet', packet)
+        self.conductor.reaper.on_hfdl(packet)
 
     def on_fatal_error(self, data: tuple[str, str]) -> None:
         receiver, error = data
@@ -95,6 +96,7 @@ class Observer888(hfdl_observer.bus.Publisher):
     def start(self) -> None:
         self.active_ground_stations.start()
         self.hfdl_listener.start(self.hfdl_consumers)  # self.active_ground_stations.on_hfdl)
+        self.conductor.reaper.start()
 
     def kill(self) -> None:
         logger.warning(f'{self} killed')

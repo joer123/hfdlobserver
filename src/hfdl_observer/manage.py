@@ -6,6 +6,7 @@
 
 import asyncio
 import datetime
+import functools
 import json
 import logging
 
@@ -147,6 +148,9 @@ class ReceiverProxy(hfdl_observer.bus.Publisher):
     def connect(self, queue: hfdl_observer.bus.Publisher) -> None:
         queue.subscribe(f'receiver:{self.name}', self.on_local_event)
 
+    def send(self, *params: Any) -> None:
+        self.publish(f'receiver:{self.name}', tuple(params))
+
     def covers(self, allocation: hfdl_observer.data.Allocation) -> bool:
         for x in allocation.frequencies:
             if not self.allocation or x not in self.allocation.frequencies:
@@ -157,7 +161,8 @@ class ReceiverProxy(hfdl_observer.bus.Publisher):
     def on_local_event(self, data: tuple[str, Any]) -> None:
         action, arg = data
         if action == 'listen':
-            self.publish(f'receiver:{self.name}', data)
+            self.send(data)
+            # self.publish(f'receiver:{self.name}', data)
 
     def on_remote_event(self, data: tuple[str, Any]) -> None:
         action, arg = data
@@ -168,6 +173,12 @@ class ReceiverProxy(hfdl_observer.bus.Publisher):
 
     def __str__(self) -> str:
         return f'{self.name} on {self.allocation}'
+
+    def die(self) -> None:
+        self.send('die')
+
+    def listen(self, freqs: list[int]) -> None:
+        self.send('listen', freqs)
 
 
 class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
@@ -189,6 +200,8 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                 else:
                     ignored.append((ignore, ignore))
         self.proxies = []
+        self.reaper = Reaper()
+        self.reaper.subscribe('dead-receiver', self.on_dead_receiver)
 
     @property
     def parameters(self) -> hfdl_observer.data.Parameters:
@@ -247,9 +260,69 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
 
         for allocation, receiver in zip(starts, available, strict=False):
             listening_freq_count += len(allocation.frequencies)
-            receiver_freqs = receiver.allocation.frequencies if receiver.allocation is not None else []
+            if receiver.allocation:
+                self.reaper.remove_allocation(receiver.allocation)
+                receiver_freqs = receiver.allocation.frequencies
+            else:
+                receiver_freqs = []
             logger.info(f'assigned {allocation.frequencies} to {receiver.name} (was {receiver_freqs})')
-            self.publish(f'receiver:{receiver.name}', ('listen', allocation.frequencies))
+            receiver.listen(allocation.frequencies)
+            self.reaper.add_allocation(allocation)
+            # This does not need to be pubsub. The receiver is already a local proxy
+            # self.publish(f'receiver:{receiver.name}', ('listen', allocation.frequencies))
 
         logger.info(f'Listening to {listening_freq_count} of {all_freq_count} active frequencies')
         return desired_allocations
+
+    def on_dead_receiver(self, frequencies: list[int]) -> None:
+        for receiver in self.proxies:
+            if receiver.allocation and receiver.allocation.frequencies == frequencies:
+                receiver.die()
+
+
+REAPER_HORIZON = 3600
+
+
+class Reaper(hfdl_observer.bus.Publisher):
+    allocations: dict[int, hfdl_observer.data.Allocation]
+    last_seen: dict[int, int]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.allocations = {}
+        self.last_seen = {}
+
+    async def run(self) -> None:
+        while True:
+            await asyncio.sleep(59)
+
+    @functools.cached_property
+    def task(self) -> asyncio.Task:
+        return asyncio.get_running_loop().create_task(self.run())
+
+    def start(self) -> asyncio.Task:
+        return self.task
+
+    def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
+        frequency = packet.frequency
+        self.last_seen[frequency] = max(packet.timestamp, self.last_seen.get(frequency, 0))
+
+    def add_allocation(self, allocation: hfdl_observer.data.Allocation) -> None:
+        logger.info(f'reaper adding allocation {allocation}')
+        for freq in allocation.frequencies:
+            self.allocations[freq] = allocation
+
+    def remove_allocation(self, allocation: hfdl_observer.data.Allocation) -> None:
+        logger.info(f'reaper removing allocation {allocation}')
+        for freq in allocation.frequencies:
+            if freq in self.allocations:
+                del self.allocations[freq]
+            if freq in self.last_seen:
+                del self.last_seen[freq]
+
+    def check(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        horizon = now - REAPER_HORIZON
+        for freq, allocation in self.allocations.items():
+            if 0 < self.last_seen.get(freq, 0) < horizon:
+                self.publish('dead-receiver', allocation.frequencies)

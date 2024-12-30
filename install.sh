@@ -14,6 +14,7 @@ pushd $HOME
 [[ -d .virtualenvs ]] || mkdir .virtualenvs
 VENV="$HOME/.virtualenvs/hfdlobserver888"
 python3 -m venv "${VENV}"
+popd
 source "${VENV}/bin/activate"
 pip install -r requirements.txt
 

@@ -113,6 +113,9 @@ class Web888Receiver(LocalReceiver):
             self.listen(arg)
         elif action == 'ping':
             self.publish(f'receiver:{self.name}', ('pong', None))
+        elif action == 'die':
+            logger.warning(f'{self} received DIE order')
+            # self.kill()
 
     def __str__(self) -> str:
         return f'({self.__class__.__name__}) {self.name} on {self.frequencies}'
