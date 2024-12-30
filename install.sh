@@ -1,5 +1,11 @@
+#!/usr/bin/env bash
 # bootstrap install
 # basic requirements.
+if [[ $UID = 0 ]] ; then
+    echo "This installer is intended to be run as a normal user."
+    exit -1
+fi
+
 export NEWT_COLORS='root=,black'
 sudo apt install -y whiptail python3 python3-venv git
 
@@ -7,7 +13,7 @@ sudo apt install -y whiptail python3 python3-venv git
 pushd $HOME
 [[ -d .virtualenvs ]] || mkdir .virtualenvs
 VENV="$HOME/.virtualenvs/hfdlobserver888"
-python -m venv "${VENV}"
+python3 -m venv "${VENV}"
 source "${VENV}/bin/activate"
 pip install -r requirements.txt
 
