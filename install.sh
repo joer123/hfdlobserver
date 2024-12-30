@@ -5,16 +5,18 @@ if [[ $UID = 0 ]] ; then
     echo "This installer is intended to be run as a normal user."
     exit -1
 fi
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 export NEWT_COLORS='root=,black'
 sudo apt install -y whiptail python3 python3-venv git
 
 # create virtualenvironment
-pushd $HOME
+cd $HOME
 [[ -d .virtualenvs ]] || mkdir .virtualenvs
 VENV="$HOME/.virtualenvs/hfdlobserver888"
 python3 -m venv "${VENV}"
-popd
+
+cd "$SCRIPT_DIR"
 source "${VENV}/bin/activate"
 pip install -r requirements.txt
 
