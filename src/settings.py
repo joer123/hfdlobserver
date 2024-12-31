@@ -10,6 +10,7 @@ import json
 import os
 import os.path
 import pathlib
+import shutil
 import yaml
 
 from typing import Union
@@ -166,6 +167,15 @@ def as_path(path_str: str, make_absolute: bool = True) -> pathlib.Path:
         return path
     else:
         return base_path / path
+
+
+def as_executable_path(path_str: str) -> pathlib.Path:
+    # find the executable.
+    for absolute in [False, True]:
+        executable_path = as_path(path_str, make_absolute=absolute)
+        if shutil.which(executable_path):
+            return executable_path
+    raise FileNotFoundError(path_str)
 
 
 if __name__ == '__main__':

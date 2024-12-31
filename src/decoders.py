@@ -61,7 +61,7 @@ class IQDecoder(BaseDecoder):
             logger.warning(f'{self} requested an empty command line')
             return []
         cmd = [
-            str(settings.as_path(self.config['decoder_path'], make_absolute=False)),
+            str(settings.as_executable_path(self.config['decoder_path'])),
             '--iq-file', '-',
             '--sample-rate', str(self.allocation.allowed_width * 1000),
             '--sample-format', 'CS16',

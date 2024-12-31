@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # hfdlobserver888.sh
 # copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.

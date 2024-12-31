@@ -44,8 +44,9 @@ class KiwiClient:
             return []
         # python3 kiwirecorder.py --nc -s n4dkd.asuscomm.com -p 8901 --log info -f 8927 -m iq --tlimit 60 --user kiwi_nc
         # | dumphfdl --iq-file - --sample-rate 12000 --sample-format CS16 --read-buffer-size 9600 --centerfreq 8927 8927
+        # find the executable.
         return [
-            str(settings.as_path(self.config['recorder_path'], make_absolute=False)),
+            str(settings.as_executable_path(self.config['recorder_path'])),
             '--nc',
             '--log', 'info',
             '-s', self.config['address'],
