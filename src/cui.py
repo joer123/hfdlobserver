@@ -4,6 +4,7 @@
 # TL;DR: BSD 3-clause
 #
 
+import asyncio
 import collections
 import functools
 import datetime
@@ -37,14 +38,18 @@ class ObserverDisplay:
     counts: Optional[rich.table.Table] = None
     tty_bar: Optional[rich.table.Table] = None
     tty: Optional[rich.table.Table] = None
+    forecast: Optional[rich.table.Text] = None
 
-    def __init__(self, console: rich.console.Console, ticker: 'Ticker') -> None:
+    def __init__(
+        self, console: rich.console.Console, ticker: 'Ticker', forecaster: hfdl_observer.bus.RemoteURLRefresher
+    ) -> None:
         self.console = console
         self.ticker = ticker
         self.root = rich.layout.Layout("HFDL.observer/888")
         self.ticker.display = self
         self.update_status()
         self.update_tty_bar()
+        forecaster.subscribe('response', self.on_forecast)
 
     def update(self) -> None:
         t = rich.table.Table.grid(expand=True, pad_edge=False, padding=(0, 0))
@@ -62,6 +67,7 @@ class ObserverDisplay:
     def update_status(self) -> None:
         table = rich.table.Table.grid(expand=True)
         table.add_column()
+        table.add_column(justify="center")
         table.add_column(justify="right")
         text = rich.text.Text()
         text.append(' 📡 ')
@@ -73,7 +79,7 @@ class ObserverDisplay:
         uptime -= datetime.timedelta(0, 0, uptime.microseconds)
         right = rich.text.Text(f'UP {uptime}')
 
-        table.add_row(text, right, style='on dark_green')
+        table.add_row(text, self.forecast or '', right, style='on dark_green')
         self.status = table
         # self.update()
 
@@ -101,6 +107,51 @@ class ObserverDisplay:
         if table.row_count:
             self.counts = table
         # self.update()
+
+    def on_forecast(self, data: Any) -> None:
+        try:
+            styles = {
+                "extreme": "yellow1 on dark_red",
+                "severe": "black on red1",
+                "strong": "black on dark_orange",
+                "moderate": "black on orange1",
+                "minor": "black on gold1",
+                "none": "white on bright_black"
+            }
+            # value_map = {
+            #     "0": "∘",
+            #     "1": "▁",
+            #     "2": "▃",
+            #     "3": "▅",
+            #     "4": "▆",
+            #     "5": "▓",
+            # }
+            recent = data['-1']
+            current = data['0']
+            forecast1d = data['1']
+            # forecast2d = data['2']
+            # forecast3d = data['3']
+            text = rich.text.Text()
+            text.append(f'R{recent["R"]["Scale"]}', style=styles[recent["R"]["Text"]])
+            text.append('|')
+            text.append(f'S{recent["S"]["Scale"]}', style=styles[recent["S"]["Text"]])
+            text.append('|')
+            text.append(f'G{recent["G"]["Scale"]}', style=styles[recent["G"]["Text"]])
+            text.append('  ')
+            text.append(f'R{current["R"]["Scale"]}', style=styles[current["R"]["Text"]])
+            text.append('|')
+            text.append(f'S{current["S"]["Scale"]}', style=styles[current["S"]["Text"]])
+            text.append('|')
+            text.append(f'G{current["G"]["Scale"]}', style=styles[current["G"]["Text"]])
+            text.append('  ')
+            text.append(f'R{forecast1d["R"]["MinorProb"]}/{forecast1d["R"]["MajorProb"]}', styles["none"]),
+            text.append('|')
+            text.append(f'S{forecast1d["S"]["Prob"]}', styles["none"]),
+            text.append('|')
+            text.append(f'G{forecast1d["G"]["Scale"]}', styles[forecast1d["G"]["Text"]]),
+            self.forecast = text
+        except Exception as err:
+            logger.error('ignoring forecaster error', exc_info=err)
 
     @property
     def current_width(self) -> int:
@@ -262,7 +313,10 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     )
     ticker = Ticker()
     ticker.refresh_period = 60
-    display = ObserverDisplay(console, ticker)
+
+    forecaster = hfdl_observer.bus.RemoteURLRefresher('https://services.swpc.noaa.gov/products/noaa-scales.json', 617)
+
+    display = ObserverDisplay(console, ticker, forecaster)
 
     # setup logging
     logging_console.output = display.update_log
@@ -278,6 +332,10 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         force=True
     )
 
+    def observing(observer: main.Observer888) -> None:
+        ticker.register(observer)
+        asyncio.get_event_loop().create_task(forecaster.run())
+
     with RichLive(
         display.root, refresh_per_second=SCREEN_REFRESH_RATE, console=console, transient=True, screen=True,
         redirect_stderr=False, redirect_stdout=False, vertical_overflow="crop",
@@ -286,7 +344,7 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
             display.update_status,
             display.update,
         ]
-        main.observe(on_observer=ticker.register)
+        main.observe(on_observer=observing)
 
 
 if __name__ == '__main__':
