@@ -94,6 +94,11 @@ class PacketCounter:
             sample_bin = now_bin - int(sample.when) // size
             _rows.setdefault(sample.freq, {}).setdefault(sample_bin, 0)
             _rows[sample.freq][sample_bin] += 1
+        # for the samples available, ensure other empty bins are created.
+        expected_row_count = (now - then) // size
+        for freq, row in _rows.items():
+            for binno in range(expected_row_count + 1):
+                row.setdefault(binno, 0)
         return _rows
 
     def sample_counts(self, counts: dict[int, dict[int, int]]) -> tuple[list[int], dict[int, list[int]]]:
