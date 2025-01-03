@@ -151,7 +151,7 @@ class ObserverDisplay:
             text.append(f'G{forecast1d["G"]["Scale"]}', styles[forecast1d["G"]["Text"]]),
             self.forecast = text
         except Exception as err:
-            logger.error('ignoring forecaster error', exc_info=err)
+            logger.warning('ignoring forecaster error', exc_info=err)
 
     @property
     def current_width(self) -> int:
