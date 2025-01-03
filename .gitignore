@@ -7,3 +7,8 @@ settings.yaml
 settings.yaml.new
 settings.yaml.safe
 *.state
+
+kiwiclient
+libacars
+statsd-c-client
+dumphfdl
