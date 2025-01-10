@@ -66,7 +66,7 @@ class ActiveGroundStations(hfdl_observer.groundstation.GroundStationStatus):
                 previous_table = hfdl_observer.groundstation.AirframesStationTable()
                 previous_table.update(previous)
                 self.add_table(previous_table)
-        for file_source in config.get('station_files', []):
+        for file_source in [settings.as_path(p) for p in config.get('station_files', [])]:
             table = hfdl_observer.groundstation.SystemTable()
             file_watcher = hfdl_observer.bus.FileRefresher(file_source, period=3600)
             file_watcher.subscribe('text', table.update)

@@ -183,11 +183,11 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
         file_okay=True,
         dir_okay=False,
         exists=True,
-    ), default='settings.yaml'
+    ), default=None,
 )
-def command(headless: bool, debug: bool, log: Optional[pathlib.Path], config: pathlib.Path) -> None:
+def command(headless: bool, debug: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]) -> None:
 
-    settings.load(config)
+    settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     handler = logging.handlers.TimedRotatingFileHandler(log, when='d', interval=1) if log else None
 
     # if not executed in a tty-like thing, headless is forced.

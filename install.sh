@@ -15,6 +15,10 @@ cd $HOME
 [[ -d .virtualenvs ]] || mkdir .virtualenvs
 VENV="$HOME/.virtualenvs/hfdlobserver888"
 python3 -m venv "${VENV}"
+if [[ $? != 0 ]] ; then
+    echo 'could not create virtual environment install failed; bailing.'
+    exit -1
+fi
 
 cd "$SCRIPT_DIR"
 source "${VENV}/bin/activate"
