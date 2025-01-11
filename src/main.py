@@ -124,18 +124,22 @@ def cancel_all_tasks() -> None:
         pass
 
 
-def observe(on_observer: Optional[Callable[[Observer888], None]] = None) -> None:
+def observe(on_observer: Optional[Callable[[Observer888, packet_stats.PacketCounter], None]] = None) -> None:
     loop = asyncio.get_event_loop()
 
     observer = Observer888(settings.registry['observer888'])
+
+    packet_counter = packet_stats.PacketCounter()
+    observer.subscribe('packet', packet_counter.on_hfdl)
+    observer.subscribe('observing', packet_counter.on_observing)
+    observer.subscribe('frequencies', packet_counter.on_frequencies)
+
     if on_observer:
-        on_observer(observer)
+        on_observer(observer, packet_counter)
     else:
-        log_counter = packet_stats.PacketCounter()
+        log_counter = packet_stats.LoggedPacketCounts()
+        log_counter.register_packet_counter(packet_counter)
         log_counter.start(loop)
-        observer.subscribe('packet', log_counter.on_hfdl)
-        observer.subscribe('observing', log_counter.on_observing)
-        observer.subscribe('frequencies', log_counter.on_frequencies)
 
     main_task = asyncio.ensure_future(async_observe(observer))
     for signal in [SIGINT, SIGTERM]:

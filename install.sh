@@ -31,6 +31,11 @@ else
     git clone https://github.com/jks-prv/kiwiclient.git
 fi
 
+if [[ ! -r kiwiclient/kiwirecorder.py ]] ; t hen
+    echo "kiwiclient did not install. Exiting."
+    exit 1;
+fi
+
 # download and install dumphfdl if needed
 if ( which dumphfdl ) then
     echo "dumphfdl appears to be installed. Skipping build."

@@ -79,6 +79,8 @@ class PacketCounter:
 
     # this only does a count of hits per frequency per bin. Later may add SNR statistics.
     def bins(self, since: int, size: int) -> dict[int, dict[int, int]]:
+        if not self.samples:
+            return {}
         self.prune()
         now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if since < 0:
@@ -117,6 +119,25 @@ class PacketCounter:
             rows[freq] = row
         return (cols, rows)
 
+    def binned_counts(self, since: int, size: int) -> tuple[list[int], dict[int, list[int]]]:
+        binned_samples = self.bins(since, size)
+        if binned_samples:
+            headers, rows = self.sample_counts(binned_samples)
+            return headers, rows
+        return ([], {})
+
+
+class PacketCountRenderer:
+    packet_counter: PacketCounter
+    refresh_period: int = 60
+    task: Optional[asyncio.Task] = None
+
+    def register_packet_counter(self, packet_counter: PacketCounter) -> None:
+        self.packet_counter = packet_counter
+
+    def render(self) -> None:
+        raise NotImplementedError()
+
     def active_symbol(self, freq: int, counts: int) -> str:
         if freq:
             return '◉' if counts else '○'
@@ -151,7 +172,7 @@ class PacketCounter:
     def decorated_counts_table(
         self, headers: list[int], rows: dict[int, list[int]]
     ) -> dict[int, dict[str, Union[list[int], list[str], str, int]]]:
-        s = set(self.observed_frequencies)
+        s = set(self.packet_counter.observed_frequencies)
         s.update(rows.keys())
         zeroes = [0] * len(headers)
         all_rows = {}
@@ -159,25 +180,6 @@ class PacketCounter:
             all_rows[freq] = rows.get(freq, zeroes)
         decorated_rows = self.decorate_counts(all_rows)
         return decorated_rows
-
-    def log_counts(self) -> None:
-        if self.samples:
-            binned_samples = self.bins(-1800, 60)
-            headers, rows = self.sample_counts(binned_samples)
-            decorated_table = self.decorated_counts_table(headers, rows)
-
-            fxaxis = ['        '] + [f'{h: >3}' for h in headers]
-            logger.info("".join(fxaxis))
-
-            for freq, data in decorated_table.items():
-                tot = data["total"]
-                bins: list[int] = data["symbols"]  # type: ignore
-                row = f'{data["active"]: <2}{freq: >6}{"".join(f"{c: >3}" for c in bins)}{f"{tot: >4}" if tot else ""}'
-                logger.info(row)
-
-    def render(self) -> None:
-        # DEFAULT. Override this to send the stats someplace else.
-        self.log_counts()
 
     async def run(self) -> None:
         try:
@@ -197,3 +199,19 @@ class PacketCounter:
         if not self.task:
             loop = loop or asyncio.get_running_loop()
             self.task = loop.create_task(self.run())
+
+
+class LoggedPacketCounts(PacketCountRenderer):
+    def render(self) -> None:
+        headers, rows = self.packet_counter.binned_counts(-1800, 60)
+        if rows:
+            decorated_table = self.decorated_counts_table(headers, rows)
+
+            fxaxis = ['        '] + [f'{h: >3}' for h in headers]
+            logger.info("".join(fxaxis))
+
+            for freq, data in decorated_table.items():
+                tot = data["total"]
+                bins: list[int] = data["symbols"]  # type: ignore
+                row = f'{data["active"]: <2}{freq: >6}{"".join(f"{c: >3}" for c in bins)}{f"{tot: >4}" if tot else ""}'
+                logger.info(row)

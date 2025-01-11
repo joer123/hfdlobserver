@@ -169,25 +169,25 @@ NORMAL_TEXT = rich.style.Style.parse('white on black')
 PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
 
 
-class Ticker(packet_stats.PacketCounter):
+class Ticker(packet_stats.PacketCountRenderer):
     last_render_time: float = 0
     display: ObserverDisplay
 
-    def register(self, observer: main.Observer888) -> None:
+    def register(self, observer: main.Observer888, packet_counter: packet_stats.PacketCounter) -> None:
+        self.register_packet_counter(packet_counter)
+
         observer.subscribe('packet', self.on_hfdl)
         observer.subscribe('observing', self.on_observing)
-        observer.subscribe('frequencies', self.on_frequencies)
+        # observer.subscribe('frequencies', self.on_frequencies)
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         if not self.task:
             self.start()
-        super().on_hfdl(packet)
         self.maybe_render()
 
     def on_observing(self, active_frequencies: list[int]) -> None:
         if not self.task:
             self.start()
-        super().on_observing(active_frequencies)
 
     @functools.cache
     def style(self, value: int) -> Optional[rich.style.Style]:
@@ -203,24 +203,20 @@ class Ticker(packet_stats.PacketCounter):
             self.render()
 
     def render(self) -> None:
-        table = rich.table.Table(
-            show_header=False, show_footer=False, show_edge=False, show_lines=False, expand=True
-        )
-        if self.samples:
-            width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
-            possible_bins = width // 3
-            binned_samples = self.bins(-1 * 60 * possible_bins, 60)
-            headers, rows = self.sample_counts(binned_samples)
+        table = rich.table.Table.grid(expand=True)
+        width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
+        possible_bins = width // 3
+        headers, rows = self.packet_counter.binned_counts(-60 * possible_bins, 60)
+        if rows:
             decorated_table = self.decorated_counts_table(headers, rows)
 
-            table = rich.table.Table.grid(expand=True)
             display_headers = BASE_HEADERS[:len(headers)]
 
             table.add_row(f" 📊 Packets/min   {''.join(display_headers)}", style=COUNT_HEADER)
             for freq, data in decorated_table.items():
                 row_text = rich.text.Text(style=SUBDUED_TEXT)
                 row_text.append(f'{data["active"]: ^3}', style=PROMINENT_TEXT)
-                station = self.observed_stations[freq]
+                station = self.packet_counter.observed_stations[freq]
                 sname = packet_stats.STATION_ABBREVIATIONS.get(station['id'], '')
                 if station.get('pending'):
                     row_text.append(f'{sname.lower(): >9}', style='grey30')
@@ -240,7 +236,7 @@ class Ticker(packet_stats.PacketCounter):
             self.last_render_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
         else:
             table.add_row(" 📊 Packets/min", style=COUNT_HEADER)
-            table.add_row("Awaiting data...")
+            table.add_row(" Awaiting data...")
         self.display.update_counts(table)
 
 
@@ -332,8 +328,8 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         force=True
     )
 
-    def observing(observer: main.Observer888) -> None:
-        ticker.register(observer)
+    def observing(observer: main.Observer888, packet_counter: packet_stats.PacketCounter) -> None:
+        ticker.register(observer, packet_counter)
         asyncio.get_event_loop().create_task(forecaster.run())
 
     with RichLive(

@@ -23,6 +23,6 @@ configs:
     default: {}
   client:
     default:
-      recorder_path: '$HOME/kiwiclient/kiwirecorder.py'
+      recorder_path: 'kiwiclient/kiwirecorder.py'
       address: web-888.local
       port: 8073
