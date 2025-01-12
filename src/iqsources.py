@@ -53,6 +53,9 @@ class KiwiClient:
             '-p', str(self.config['port']),
             '-f', str(self.allocation.center),
             '-m', 'iq',
+            '-L', '-10000', '-H', '10000',
+            '--OV',
+            '--agc-yaml', str(settings.as_path(self.config.get('agc_file', 'agc.yaml'))),  # FIXME this isn't quite right.
             '--user', self.config['username'],
             # '--tlimit', '120',
         ]
