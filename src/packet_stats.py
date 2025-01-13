@@ -13,6 +13,7 @@ import logging
 
 from typing import Optional, Union
 
+import hfdl_observer.bus
 import hfdl_observer.hfdl
 
 
@@ -41,11 +42,31 @@ STATION_ABBREVIATIONS = {
 }
 
 
+class CumulativePacketStats(hfdl_observer.bus.Publisher):
+    packets: int = 0
+    from_air: int = 0
+    from_ground: int = 0
+    with_position: int = 0
+    no_position: int = 0
+    squitters: int = 0
+
+    def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
+        self.packets += 1
+        if packet.is_downlink:
+            self.from_air += 1
+        if packet.is_uplink:
+            self.from_ground += 1
+        if packet.is_squitter:
+            self.squitters += 1
+        if packet.position:
+            self.with_position += 1
+        else:
+            self.no_position += 1
+        self.publish('update', self)
+
+
 class PacketCounter:
     samples: list[Sample]
-    horizon: int = 86400
-    refresh_period: int = 60
-    task: Optional[asyncio.Task] = None
     observed_frequencies: list[int]
     observed_stations: dict[int, dict]
 
@@ -68,20 +89,22 @@ class PacketCounter:
             for freq in freqs:
                 self.observed_stations.setdefault(freq, {'id': sid, 'pending': True})
 
-    def prune(self) -> None:
-        # original = len(self.samples)
+    def prune(self, horizon: int) -> None:
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        then = now - self.horizon
+        then = now - horizon
         first = bisect.bisect_left(self.samples, Sample(then, None, None))
         if first > 0:
             self.samples = self.samples[first:]
-        # logger.debug(f'samples pruned from {original} to {len(self.samples)}')
+
+
+class BinnedPacketCounter(PacketCounter):
+    horizon: int = 86400
 
     # this only does a count of hits per frequency per bin. Later may add SNR statistics.
     def bins(self, since: int, size: int) -> dict[int, dict[int, int]]:
         if not self.samples:
             return {}
-        self.prune()
+        self.prune(self.horizon)
         now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if since < 0:
             then = now + since
@@ -128,11 +151,11 @@ class PacketCounter:
 
 
 class PacketCountRenderer:
-    packet_counter: PacketCounter
+    packet_counter: BinnedPacketCounter
     refresh_period: int = 60
     task: Optional[asyncio.Task] = None
 
-    def register_packet_counter(self, packet_counter: PacketCounter) -> None:
+    def register_packet_counter(self, packet_counter: BinnedPacketCounter) -> None:
         self.packet_counter = packet_counter
 
     def render(self) -> None:

@@ -59,8 +59,52 @@ class HFDLPacketInfo:
         return self.dst.get('type') == 'Ground station'
 
     @property
+    def is_squitter(self) -> bool:
+        return True if self.packet.get('spdu') else False
+
+    @property
     def when(self) -> datetime.datetime:
         return datetime.datetime.utcfromtimestamp(self.timestamp)
+
+    cpdlc_pos = "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.pos.data.lat_lon".split('.')
+    cpdlc_alt = "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.alt_pos.pos.data.lat_lon".split('.')
+
+    @property
+    def position(self) -> Optional[tuple[str, str]]:
+        # position could be in several places...
+        # all in "hfdl.lpdu.hfnpdu"
+        # "pos"
+        # "acars.arinc622.adsc.tags.<list>.basic_report"
+        # "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.pos.data.lat_lon"
+        # "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.alt_pos.pos.data.lat_lon"
+        def get_path(d: dict, path: list[str]) -> Optional[Any]:
+            car, *cdr = path
+            try:
+                node = d[car]
+            except (KeyError, AttributeError, IndexError):
+                return None
+            if cdr:
+                return get_path(node, cdr)
+            return node
+
+        try:
+            hfnpdu = self.packet.get('lpdu', {}).get('hfnpdu')
+            if hfnpdu:
+                pos = hfnpdu.get('pos')
+                if pos:
+                    return (pos['lat'], pos['lon'])
+                for tag in get_path(hfnpdu, ['acars', 'arinc622', 'adsc', 'tags']) or []:
+                    pos = tag.get('basic_report')
+                    if pos:
+                        return (pos['lat'], pos['lon'])
+                for p in [self.cpdlc_pos, self.cpdlc_alt]:
+                    pos = get_path(hfnpdu, p)
+                    if pos:
+                        return (pos['lat'], pos['lon'])
+        except KeyError:
+            pass
+
+        return None
 
     def __str__(self) -> str:
         direction = "FROM" if self.is_uplink else "TO"

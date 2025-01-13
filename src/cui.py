@@ -35,18 +35,24 @@ SCREEN_REFRESH_RATE = 2
 
 class ObserverDisplay:
     status: Optional[rich.table.Table] = None
+    totals: Optional[rich.table.Table] = None
     counts: Optional[rich.table.Table] = None
     tty_bar: Optional[rich.table.Table] = None
     tty: Optional[rich.table.Table] = None
     forecast: Optional[rich.table.Text] = None
 
     def __init__(
-        self, console: rich.console.Console, ticker: 'Ticker', forecaster: hfdl_observer.bus.RemoteURLRefresher
+        self,
+        console: rich.console.Console,
+        ticker: 'Ticker',
+        cumulative_line: 'CumulativeLine',
+        forecaster: hfdl_observer.bus.RemoteURLRefresher,
     ) -> None:
         self.console = console
         self.ticker = ticker
         self.root = rich.layout.Layout("HFDL.observer/888")
         self.ticker.display = self
+        cumulative_line.display = self
         self.update_status()
         self.update_tty_bar()
         forecaster.subscribe('response', self.on_forecast)
@@ -55,6 +61,8 @@ class ObserverDisplay:
         t = rich.table.Table.grid(expand=True, pad_edge=False, padding=(0, 0))
         if self.status:
             t.add_row(self.status)
+        if self.totals:
+            t.add_row(self.totals)
         if self.counts:
             t.add_row(self.counts)
         if self.tty_bar:
@@ -87,6 +95,23 @@ class ObserverDisplay:
         table = rich.table.Table.grid(expand=True)
         table.add_row(' 📰 Log', style='bright_white on white')
         self.tty_bar = table
+
+    def update_totals(self, cumulative: packet_stats.CumulativePacketStats) -> None:
+        table = rich.table.Table.grid(expand=True)
+        table.add_column()  # title
+        # table.add_column(justify='center')  # Up / Down
+        # table.add_column(justify='center')  # Pos / NoPos
+        # table.add_column(justify='center')  # Squitters
+        table.add_column(justify='right')   # Grand Total
+        table.add_row(
+            rich.text.Text(" Totals (since start)", style='bold bright_white'),
+            f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
+            f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
+            f"|  📰{cumulative.squitters}  "
+            f"|  📶{cumulative.packets}  ",
+            style='white on black'
+        )
+        self.totals = table
 
     def update_log(self, ring: collections.deque) -> None:
         # WARNING: do not log from within this method.
@@ -162,6 +187,18 @@ class ObserverDisplay:
         return self.console.options.size.height or 25
 
 
+class CumulativeLine:
+    display: ObserverDisplay
+
+    def register(self, cumulative: packet_stats.CumulativePacketStats) -> None:
+        self.cumulative = cumulative
+        cumulative.subscribe('update', self.on_update)
+
+    def on_update(self, _: Any) -> None:
+        if self.display:
+            self.display.update_totals(self.cumulative)
+
+
 BASE_HEADERS = ['NOW'] + (['   '] * 4 + [' ¦ '] + ['   '] * 4 + [' ┇ ']) * 12
 COUNT_HEADER = rich.style.Style.parse('bright_white on white')
 SUBDUED_TEXT = rich.style.Style.parse('bright_black on black')
@@ -173,7 +210,7 @@ class Ticker(packet_stats.PacketCountRenderer):
     last_render_time: float = 0
     display: ObserverDisplay
 
-    def register(self, observer: main.Observer888, packet_counter: packet_stats.PacketCounter) -> None:
+    def register(self, observer: main.Observer888, packet_counter: packet_stats.BinnedPacketCounter) -> None:
         self.register_packet_counter(packet_counter)
 
         observer.subscribe('packet', self.on_hfdl)
@@ -309,10 +346,11 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     )
     ticker = Ticker()
     ticker.refresh_period = 60
+    cumulative_line = CumulativeLine()
 
     forecaster = hfdl_observer.bus.RemoteURLRefresher('https://services.swpc.noaa.gov/products/noaa-scales.json', 617)
 
-    display = ObserverDisplay(console, ticker, forecaster)
+    display = ObserverDisplay(console, ticker, cumulative_line, forecaster)
 
     # setup logging
     logging_console.output = display.update_log
@@ -328,8 +366,13 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         force=True
     )
 
-    def observing(observer: main.Observer888, packet_counter: packet_stats.PacketCounter) -> None:
+    def observing(
+        observer: main.Observer888,
+        packet_counter: packet_stats.BinnedPacketCounter,
+        cumulative: packet_stats.CumulativePacketStats,
+    ) -> None:
         ticker.register(observer, packet_counter)
+        cumulative_line.register(cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
 
     with RichLive(
