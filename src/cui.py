@@ -50,9 +50,10 @@ class ObserverDisplay:
     ) -> None:
         self.console = console
         self.ticker = ticker
+        self.cumulative_line = cumulative_line
         self.root = rich.layout.Layout("HFDL.observer/888")
         self.ticker.display = self
-        cumulative_line.display = self
+        self.cumulative_line.display = self
         self.update_status()
         self.update_tty_bar()
         forecaster.subscribe('response', self.on_forecast)
@@ -103,11 +104,14 @@ class ObserverDisplay:
         # table.add_column(justify='center')  # Pos / NoPos
         # table.add_column(justify='center')  # Squitters
         table.add_column(justify='right')   # Grand Total
+        active_count = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
+        observed_count = str(self.cumulative_line.observed) if self.cumulative_line.observed is not None else '?'
         table.add_row(
             rich.text.Text(" Totals (since start)", style='bold bright_white'),
             f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
             f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
             f"|  📰{cumulative.squitters}  "
+            f"|  🔎{observed_count}/{active_count}  "
             f"|  📶{cumulative.packets}  ",
             style='white on black'
         )
@@ -189,14 +193,24 @@ class ObserverDisplay:
 
 class CumulativeLine:
     display: ObserverDisplay
+    observed: Optional[int] = None
+    active: Optional[int] = None
 
-    def register(self, cumulative: packet_stats.CumulativePacketStats) -> None:
+    def register(self, observer: main.Observer888, cumulative: packet_stats.CumulativePacketStats) -> None:
         self.cumulative = cumulative
         cumulative.subscribe('update', self.on_update)
+        observer.subscribe('active', self.on_active)
+        observer.subscribe('observing', self.on_observing)
 
     def on_update(self, _: Any) -> None:
         if self.display:
             self.display.update_totals(self.cumulative)
+
+    def on_observing(self, observed_frequencies: list[int]) -> None:
+        self.observed = len(observed_frequencies)
+
+    def on_active(self, active_frequencies: list[int]) -> None:
+        self.active = len(active_frequencies)
 
 
 BASE_HEADERS = ['NOW'] + (['   '] * 4 + [' ¦ '] + ['   '] * 4 + [' ┇ ']) * 12
@@ -372,7 +386,7 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         cumulative: packet_stats.CumulativePacketStats,
     ) -> None:
         ticker.register(observer, packet_counter)
-        cumulative_line.register(cumulative)
+        cumulative_line.register(observer, cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
 
     with RichLive(

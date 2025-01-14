@@ -81,6 +81,7 @@ class Observer888(hfdl_observer.bus.Publisher):
     def on_frequencies(self, stations: dict[int, list[int]]) -> None:
         allocations = self.conductor.allocate_frequencies(stations)
         allocated = self.conductor.orchestrate(allocations)
+        self.publish('active', list(itertools.chain(*stations.values())))
         self.publish('observing', list(itertools.chain.from_iterable(a.frequencies for a in allocated)))
         self.publish('frequencies', stations)
 
