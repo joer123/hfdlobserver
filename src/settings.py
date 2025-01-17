@@ -110,6 +110,23 @@ registry: dict[str, dict] = {
                 'quiet': False,
                 'username': 'kiwi_nc:observer888',
                 'channel_bandwidth': 12,
+                'max_channels': 13,
+                'agc_files': {
+                    '*': 'agc.yaml',
+                    2: 'agc-02M.yaml',
+                    3: 'agc-03M.yaml',
+                    4: 'agc-04M.yaml',
+                    5: 'agc-05M.yaml',
+                    6: 'agc-06M.yaml',
+                    8: 'agc-08M.yaml',
+                    10: 'agc-10M.yaml',
+                    11: 'agc-11M.yaml',
+                    12: 'agc-12M.yaml',
+                    13: 'agc-13M.yaml',
+                    15: 'agc-15M.yaml',
+                    17: 'agc-17M.yaml',
+                    21: 'agc-21M.yaml',
+                }
             }
         },
     },

@@ -9,6 +9,7 @@ import collections
 import collections.abc
 import logging
 import os
+import pathlib
 
 from typing import Any, Optional
 
@@ -39,6 +40,15 @@ class KiwiClient:
         super().__init__()
         # recoverable error? 'Too busy now. Reconnecting after 15 seconds'
 
+    def agc_file(self, center_freq: float) -> pathlib.Path:
+        agc = self.config['agc_files']
+        band = center_freq // 1000
+        for k in [band, '*']:
+            agc_file = settings.as_path(agc.get(k))
+            if agc_file.exists():
+                return agc_file
+        return settings.as_path('agc.yaml')
+
     def commandline(self) -> list[str]:
         if not self.allocation or not self.allocation.frequencies:
             return []
@@ -55,7 +65,7 @@ class KiwiClient:
             '-m', 'iq',
             '-L', '-10000', '-H', '10000',
             '--OV',
-            '--agc-yaml', str(settings.as_path(self.config.get('agc_file', 'agc.yaml'))),  # FIXME this isn't quite right.
+            '--agc-yaml', str(self.agc_file(self.allocation.center)),
             '--user', self.config['username'],
             # '--tlimit', '120',
         ]
