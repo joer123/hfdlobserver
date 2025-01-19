@@ -31,7 +31,7 @@ else
     git clone https://github.com/jks-prv/kiwiclient.git
 fi
 
-if [[ ! -r kiwiclient/kiwirecorder.py ]] ; t hen
+if [[ ! -r kiwiclient/kiwirecorder.py ]] ; then
     echo "kiwiclient did not install. Exiting."
     exit 1;
 fi
