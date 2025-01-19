@@ -12,9 +12,9 @@ sudo apt install -y whiptail python3 python3-venv git
 
 # create virtualenvironment
 cd $HOME
-[[ -d .virtualenvs ]] || mkdir .virtualenvs
 VENV="$HOME/.virtualenvs/hfdlobserver888"
-python3 -m venv "${VENV}"
+[[ -d .virtualenvs ]] || mkdir .virtualenvs
+[[ -d "${VENV}" ]] || python3 -m venv "${VENV}"
 if [[ $? != 0 ]] ; then
     echo 'could not create virtual environment install failed; bailing.'
     exit -1
