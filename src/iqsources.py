@@ -63,7 +63,7 @@ class KiwiClient:
             '-p', str(self.config['port']),
             '-f', str(self.allocation.center),
             '-m', 'iq',
-            '-L', '-10000', '-H', '10000',
+            '-L', '-8000', '-H', '8000',
             '--OV',
             '--agc-yaml', str(self.agc_file(self.allocation.center)),
             '--user', self.config['username'],
