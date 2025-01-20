@@ -247,10 +247,10 @@ class Ticker(packet_stats.PacketCountRenderer):
             self.start()
 
     @functools.cache
-    def style(self, value: int) -> Optional[rich.style.Style]:
+    def style(self, value: int, max_value: int = 0) -> Optional[rich.style.Style]:
         # with 13 slots per 32 seconds, we should not see any more than 25 packets per minute on any given frequency
         if value:
-            rgb = spectrum_colour(value, 25)
+            rgb = spectrum_colour(value, max(25, max_value))
             return rich.style.Style.parse(f'black on rgb({",".join(str(i) for i in rgb)})')
         return None
 
@@ -274,6 +274,7 @@ class Ticker(packet_stats.PacketCountRenderer):
             display_headers = BASE_HEADERS[:len(headers)]
 
             table.add_row(f" 📊 per {bin_str: <7}   {''.join(display_headers)}", style=COUNT_HEADER)
+            max_count: int = max(max(data["counts"]) for data in decorated_table.values())  # type: ignore  # shut up
             for freq, data in decorated_table.items():
                 row_text = rich.text.Text(style=SUBDUED_TEXT)
                 row_text.append(f'{data["active"]: ^3}', style=PROMINENT_TEXT)
@@ -288,7 +289,7 @@ class Ticker(packet_stats.PacketCountRenderer):
                 counts: list[int] = data["counts"]  # type: ignore  # shut up, mypy
                 for colno, (cnt, bn) in enumerate(zip(counts, bins)):
                     cell = f'{bn: ^3}' if (cnt > 0 or colno == 0 or colno % 5 != 0) else display_headers[colno]
-                    row_text.append(cell, style=self.style(cnt))
+                    row_text.append(cell, style=self.style(cnt, max_count))
                 tot = data["total"]
                 if tot:
                     row_text.append(f'{tot: >4}', style=NORMAL_TEXT)

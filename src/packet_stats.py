@@ -179,6 +179,8 @@ class PacketCountRenderer:
             return str(amount)
         if amount < 36:
             return chr(87 + amount)
+        if amount < 62:
+            return chr(29 + amount)
         return '◈'
 
     def decorate_counts(
