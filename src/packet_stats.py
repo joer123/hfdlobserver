@@ -104,7 +104,6 @@ class BinnedPacketCounter(PacketCounter):
     def bins(self, since: int, size: int) -> dict[int, dict[int, int]]:
         if not self.samples:
             return {}
-        self.prune(self.horizon)
         now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if since < 0:
             then = now + since
@@ -112,6 +111,11 @@ class BinnedPacketCounter(PacketCounter):
             then = since
         # ensure the furthest bucket is always a full one
         then -= then % size
+        # adjust the horizon and prune. somewhat experimental.
+        # max 1 week, otherwise, grow to cover the time requested.
+        self.horizon = min(7 * 86400, max(self.horizon, now - then))
+        self.prune(self.horizon)
+
         first = bisect.bisect_left(self.samples, then, key=lambda e: e[0])
         now_bin = now // size
         _rows: dict[int, dict[int, int]] = {}

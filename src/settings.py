@@ -58,6 +58,11 @@ registry: dict[str, dict] = {
         'local_receivers': [f'observer-{x:02}' for x in range(1, 14)],
         'all_receivers': {f'observer-{x:02}': {'config': 'web888'} for x in range(1, 14)}
     },
+    'cui': {
+        'ticker': {
+            'bin_size': 60,
+        }
+    },
     "configs": {
         'receiver': {
             'web888': {

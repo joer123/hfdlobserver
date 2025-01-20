@@ -27,6 +27,7 @@ import hfdl_observer.hfdl
 
 import main
 import packet_stats
+import settings
 
 logger = logging.getLogger(__name__)
 start = datetime.datetime.now()
@@ -222,7 +223,12 @@ PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
 
 class Ticker(packet_stats.PacketCountRenderer):
     last_render_time: float = 0
+    bin_size: int = 60
     display: ObserverDisplay
+
+    def __init__(self, config: dict) -> None:
+        super().__init__()
+        self.bin_size = min(3600, max(60, int(config.get('bin_size', 60))))
 
     def register(self, observer: main.Observer888, packet_counter: packet_stats.BinnedPacketCounter) -> None:
         self.register_packet_counter(packet_counter)
@@ -257,13 +263,17 @@ class Ticker(packet_stats.PacketCountRenderer):
         table = rich.table.Table.grid(expand=True)
         width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
         possible_bins = width // 3
-        headers, rows = self.packet_counter.binned_counts(-60 * possible_bins, 60)
+        headers, rows = self.packet_counter.binned_counts(-self.bin_size * possible_bins, self.bin_size)
+        if self.bin_size > 60:
+            bin_str = f'{self.bin_size}s'
+        else:
+            bin_str = 'minute'
         if rows:
             decorated_table = self.decorated_counts_table(headers, rows)
 
             display_headers = BASE_HEADERS[:len(headers)]
 
-            table.add_row(f" 📊 Packets/min   {''.join(display_headers)}", style=COUNT_HEADER)
+            table.add_row(f" 📊 per {bin_str: <7}   {''.join(display_headers)}", style=COUNT_HEADER)
             for freq, data in decorated_table.items():
                 row_text = rich.text.Text(style=SUBDUED_TEXT)
                 row_text.append(f'{data["active"]: ^3}', style=PROMINENT_TEXT)
@@ -286,7 +296,7 @@ class Ticker(packet_stats.PacketCountRenderer):
             self.display.update_counts(table)
             self.last_render_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
         else:
-            table.add_row(" 📊 Packets/min", style=COUNT_HEADER)
+            table.add_row(f" 📊 per {bin_str}", style=COUNT_HEADER)
             table.add_row(" Awaiting data...")
         self.display.update_counts(table)
 
@@ -349,6 +359,7 @@ class RichLive(rich.live.Live):
 
 
 def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
+    cui_settings = settings.registry['cui']
     console = rich.console.Console()
     console.clear()
     logging_console = ConsoleRedirector.create(max(console.options.size.height or 50, 50))
@@ -358,7 +369,7 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         highlighter=rich.highlighter.NullHighlighter(),
         enable_link_path=False,
     )
-    ticker = Ticker()
+    ticker = Ticker(cui_settings['ticker'])
     ticker.refresh_period = 60
     cumulative_line = CumulativeLine()
 
