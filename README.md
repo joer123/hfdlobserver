@@ -38,7 +38,7 @@ HFDL.observer/888 also adds a simple but rich console-based display. At the top 
 
 This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
 
-![image](https://github.com/user-attachments/assets/962b948f-af89-4a46-8512-bddaf7764d0a)
+![hfdlobserver888-screen](https://github.com/user-attachments/assets/2509f6cd-25e5-4c14-a1ea-ea42c9f0be61)
 
 ### Space Weather
 
