@@ -36,9 +36,36 @@ Processing the entire HF frequency space would be very CPU-intensive. Taking adv
 
 HFDL.observer/888 also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
 
+This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
+
 ![image](https://github.com/user-attachments/assets/962b948f-af89-4a46-8512-bddaf7764d0a)
 
-This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
+### Space Weather
+
+On the top line is the current up time for the app. To its left is the current Space Weather dashboard. It is the same data shown on the [NOAA Space Weather Enthusiats Dashboard](https://www.swpc.noaa.gov/communities/space-weather-enthusiasts-dashboard). There's an explanation of the scales there. This is useful for a quick glance to diagnose reception issues. They are a bit condensed here. In each group:
+
+- R = Radio Blackouts
+- S = Solar Radiation Impact
+- G = Geomagnetic Storm Impact
+
+`R2|S0|G0` The first group describes the recent (24h) maxima of indicators. Generally if there is a number higher than 0 in any of these, especially "R", that may explain unusual reception numbers in the recent past.
+
+`R0|S0|G0` The second group describes "current" conditions. Note that this isn't always completely relevant to your precise location given the rotation of the earth.
+
+`R70/30|S15|G0` This is a forecast for the next 24 hours. The "R" number gives the percent chance for "major" and "minor" events. The "S" number gives a percent chance for the "S" rating to rise above 0. The "G" number is the forecast level of Geomagnetic Storm Impact (this is the level, not a probability).
+
+### Cumulative Stats
+
+The next line provides an overview of the total stats since the app started.
+
+- ⏬ packets received from aircraft
+- ⏫ packets received from ground stations
+- 🌐 packets with positions
+- ❔ packets without positions
+- 📰 squitter (network update) packets received
+- 🔎 number of frequencies being observed out of the total active frequencies
+- 📶 total number of packets
+
 
 ## Setting up the Web-888
 
