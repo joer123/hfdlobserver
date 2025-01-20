@@ -38,6 +38,8 @@ HFDL.observer/888 also adds a simple but rich console-based display. At the top 
 
 This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
 
+The packet count from each bin is represented by `1` to `9`, then by `a` to `z` for 10 through 35.
+
 ![hfdlobserver888-screen](https://github.com/user-attachments/assets/2509f6cd-25e5-4c14-a1ea-ea42c9f0be61)
 
 ### Space Weather
