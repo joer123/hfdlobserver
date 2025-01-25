@@ -103,14 +103,14 @@ class ObserverDisplay:
         table.add_column()  # title
         table.add_column(justify='right')   # Grand Total
         active_count = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
-        core_count = str(self.cumulative_line.core_observed) if self.cumulative_line.core_observed is not None else '?'
+        target_count = str(self.cumulative_line.target_observed) if self.cumulative_line.target_observed is not None else '?'
         bonus_count = f' +{self.cumulative_line.bonus_observed}' if self.cumulative_line.bonus_observed else ''
         table.add_row(
             rich.text.Text(" Totals (since start)", style='bold bright_white'),
             f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
             f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
             f"|  📰{cumulative.squitters}  "
-            f"|  🔎{core_count}/{active_count}{bonus_count}  "
+            f"|  🔎{target_count}/{active_count}{bonus_count}  "
             f"|  📶{cumulative.packets}  ",
             style='white on black'
         )
@@ -194,7 +194,7 @@ class ObserverDisplay:
 
 class CumulativeLine:
     display: ObserverDisplay
-    core_observed: Optional[int] = None
+    target_observed: Optional[int] = None
     bonus_observed: Optional[int] = None
     active: Optional[int] = None
 
@@ -209,9 +209,9 @@ class CumulativeLine:
             self.display.update_totals(self.cumulative)
 
     def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
-        core, extended = observed
-        self.core_observed = len(core)
-        self.bonus_observed = len(extended) - len(core)
+        target, field = observed
+        self.target_observed = len(target)
+        self.bonus_observed = len(field) - len(target)
 
     def on_active(self, active_frequencies: list[int]) -> None:
         self.active = len(active_frequencies)
@@ -245,7 +245,7 @@ class Ticker(packet_stats.PacketCountRenderer):
             self.start()
         self.maybe_render()
 
-    def on_observing(self, active_frequencies: list[int]) -> None:
+    def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
         if not self.task:
             self.start()
 
@@ -280,7 +280,7 @@ class Ticker(packet_stats.PacketCountRenderer):
             max_count: int = max(max(data["counts"]) for data in decorated_table.values())  # type: ignore  # shut up
             for freq, data in decorated_table.items():
                 row_text = rich.text.Text(style=SUBDUED_TEXT)
-                row_text.append(f'{data["active"]: ^3}', style=PROMINENT_TEXT)
+                row_text.append(f'{data["state"]: ^3}', style=PROMINENT_TEXT)
                 station = self.packet_counter.observed_stations[freq]
                 sid = station['id'] or hfdl_observer.hfdl.STATIONS.get(int(freq), {}).get('id', 0)
                 sname = packet_stats.STATION_ABBREVIATIONS.get(sid, '')

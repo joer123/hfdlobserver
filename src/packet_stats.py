@@ -82,8 +82,8 @@ class PacketCounter:
             self.observed_stations[packet.frequency] = packet.ground_station
 
     def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
-        core, extended = observed
-        self.observed_frequencies = sorted(extended)
+        target, field = observed
+        self.observed_frequencies = sorted(field)
 
     def on_frequencies(self, active_frequencies: dict[int, list[int]]) -> None:
         for sid, freqs in active_frequencies.items():
@@ -166,7 +166,7 @@ class PacketCountRenderer:
     def render(self) -> None:
         raise NotImplementedError()
 
-    def active_symbol(self, freq: int, counts: int) -> str:
+    def state_symbol(self, freq: int, counts: int) -> str:
         if freq and freq in self.packet_counter.observed_stations:
             if counts:
                 return '◉'
@@ -196,7 +196,7 @@ class PacketCountRenderer:
             tot = sum(bins)
             symbols = list(self.count_symbol(b) for b in bins)
             decorated[freq] = {
-                'active': self.active_symbol(freq, tot),
+                'state': self.state_symbol(freq, tot),
                 'counts': bins,
                 'symbols': symbols,
                 'total': sum(bins),
@@ -247,5 +247,5 @@ class LoggedPacketCounts(PacketCountRenderer):
             for freq, data in decorated_table.items():
                 tot = data["total"]
                 bins: list[int] = data["symbols"]  # type: ignore
-                row = f'{data["active"]: <2}{freq: >6}{"".join(f"{c: >3}" for c in bins)}{f"{tot: >4}" if tot else ""}'
+                row = f'{data["state"]: <2}{freq: >6}{"".join(f"{c: >3}" for c in bins)}{f"{tot: >4}" if tot else ""}'
                 logger.info(row)

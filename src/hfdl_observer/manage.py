@@ -133,21 +133,6 @@ class ActiveGroundStations(hfdl_observer.groundstation.GroundStationStatus):
             'stratum': station.stratum.value,
             'update_source': station.update_source,
         }
-        # for lookup in self.tables:
-        #     try:
-        #         station = lookup[station_key]
-        #     except KeyError:
-        #         continue
-        #     data['id'] = station.id
-        #     data['name'] = station.name
-        #     if data['last_updated'] < station.last_updated:
-        #         data['last_updated'] = station.last_updated
-        #         data['when'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        # data['frequencies'] = {
-        #     'active': sorted(self.active_frequencies(station_key)),
-        #     'stratum': station.stratum.value,
-        #     'update_source': station.update_source,
-        # }
         return data
 
     def schedule_save(self, _: Any) -> None:
@@ -278,53 +263,53 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
     def orchestrate(
         self,
         allocations: list[hfdl_observer.data.Allocation],
-        extended_allocations: list[hfdl_observer.data.Allocation]
+        field_allocations: list[hfdl_observer.data.Allocation]
     ) -> tuple[list[hfdl_observer.data.Allocation], list[hfdl_observer.data.Allocation]]:
         keeps = {}
         starts = []
         all_freq_count = sum(len(a.frequencies) for a in allocations)
-        core_listening_count = 0
-        extended_listening_count = 0
+        target_listening_count = 0
+        field_listening_count = 0
 
-        desired_core_allocations = allocations[:len(self.proxies)]
-        desired_extended_allocations = extended_allocations[:len(self.proxies)]
+        desired_target_allocations = allocations[:len(self.proxies)]
+        desired_field_allocations = field_allocations[:len(self.proxies)]
 
-        for core_allocation, extended_allocation in zip(desired_core_allocations, desired_extended_allocations):
+        for target_allocation, field_allocation in zip(desired_target_allocations, desired_field_allocations):
             # print(allocation)
             for receiver in self.proxies:
-                if receiver.covers(extended_allocation):
-                    keeps[receiver.name] = (core_allocation, extended_allocation)
+                if receiver.covers(field_allocation):
+                    keeps[receiver.name] = (target_allocation, field_allocation)
                     break
             else:
-                starts.append((core_allocation, extended_allocation))
+                starts.append((target_allocation, field_allocation))
 
         available = []
         for receiver in self.proxies:
             if receiver.name in keeps:
-                core_allocation, extended_allocation = keeps[receiver.name]
-                if core_allocation and core_allocation.frequencies:  # by this point sb True, but mypy
-                    core_listening_count += len(core_allocation.frequencies)
-                    extended_listening_count += len(extended_allocation.frequencies)
+                target_allocation, field_allocation = keeps[receiver.name]
+                if target_allocation and target_allocation.frequencies:  # by this point sb True, but mypy
+                    target_listening_count += len(target_allocation.frequencies)
+                    field_listening_count += len(field_allocation.frequencies)
                 logger.debug(f'keeping {receiver}')
             else:
                 available.append(receiver)
 
         for data, receiver in zip(starts, available, strict=False):
-            core_allocation, extended_allocation = data
-            core_listening_count += len(core_allocation.frequencies)
-            extended_listening_count += len(extended_allocation.frequencies)
+            target_allocation, field_allocation = data
+            target_listening_count += len(target_allocation.frequencies)
+            field_listening_count += len(field_allocation.frequencies)
             if receiver.allocation:
                 self.reaper.remove_allocation(receiver.allocation)
                 receiver_freqs = receiver.allocation.frequencies
             else:
                 receiver_freqs = []
-            receiver.listen(extended_allocation.frequencies)
-            logger.info(f'assigned {extended_allocation.frequencies} to {receiver.name} (was {receiver_freqs})')
-            self.reaper.add_allocation(extended_allocation)
+            receiver.listen(field_allocation.frequencies)
+            logger.info(f'assigned {field_allocation.frequencies} to {receiver.name} (was {receiver_freqs})')
+            self.reaper.add_allocation(field_allocation)
 
-        diff = extended_listening_count - core_listening_count
-        logger.info(f'Listening to {core_listening_count} of {all_freq_count} active frequencies (+{diff} extra)')
-        return desired_core_allocations, desired_extended_allocations
+        diff = field_listening_count - target_listening_count
+        logger.info(f'Listening to {target_listening_count} of {all_freq_count} active frequencies (+{diff} extra)')
+        return desired_target_allocations, desired_field_allocations
 
     def on_dead_receiver(self, frequencies: list[int]) -> None:
         for receiver in self.proxies:
