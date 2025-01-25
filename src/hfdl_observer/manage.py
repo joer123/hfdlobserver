@@ -13,11 +13,10 @@ import logging
 from typing import Any, Callable, Coroutine, Optional, Union
 
 import hfdl_observer.bus
+import hfdl_observer.env
 import hfdl_observer.data
 import hfdl_observer.groundstation
 import hfdl_observer.hfdl
-
-import settings
 
 
 logger = logging.getLogger(__name__)
@@ -28,18 +27,20 @@ class ActiveGroundStations(hfdl_observer.groundstation.GroundStationStatus):
     hfdl_watchers: list[hfdl_observer.groundstation.GroundStationTable]
     startables: list[Callable[[], Coroutine[Any, Any, None]]]
     tasks: list[asyncio.Task]
+    systable: Optional[hfdl_observer.groundstation.SystemTable] = None
 
     def __init__(self, config: dict):
         super().__init__()
         self.will_save = False
         self.config = config
-        self.save_path = settings.as_path(config['state'])
+        self.save_path = hfdl_observer.env.as_path(config['state'])
         self.hfdl_watchers = []
         self.tasks = []
         self.startables = []
+        self.self_squitter_table = hfdl_observer.groundstation.SelfSquitterTable()
         self.squitter_table = hfdl_observer.groundstation.SquitterTable()
         self.update_table = hfdl_observer.groundstation.UpdateTable()
-        for table in [self.squitter_table, self.update_table]:
+        for table in [self.self_squitter_table, self.squitter_table, self.update_table]:
             self.hfdl_watchers.append(table)
             self.add_table(table)
             # table.subscribe('event', self.on_event)
@@ -66,12 +67,14 @@ class ActiveGroundStations(hfdl_observer.groundstation.GroundStationStatus):
                 previous_table = hfdl_observer.groundstation.AirframesStationTable()
                 previous_table.update(previous)
                 self.add_table(previous_table)
-        for file_source in [settings.as_path(p) for p in config.get('station_files', [])]:
+        for file_source in [hfdl_observer.env.as_path(p) for p in config.get('station_files', [])]:
             table = hfdl_observer.groundstation.SystemTable()
             file_watcher = hfdl_observer.bus.FileRefresher(file_source, period=3600)
+            assert file_source.exists(), f'{file_source} does not exist'
             file_watcher.subscribe('text', table.update)
             self.startables.append(file_watcher.run)
             self.add_table(table)
+            self.systable = table
         self.subscribe('update', self.schedule_save)
         self.last_state = dict()
 
@@ -94,23 +97,57 @@ class ActiveGroundStations(hfdl_observer.groundstation.GroundStationStatus):
     def active_station_frequencies(self) -> dict[int, list[int]]:
         return {sid: self.active_frequencies(sid) for sid in self.station_ids}
 
+    @property
+    def inactive_station_frequencies(self) -> dict[int, list[int]]:
+        active = self.active_station_frequencies
+        inactive: dict[int, list[int]] = {}
+        if self.systable:
+            for sid, alloc in active.items():
+                ext_freqs = inactive.setdefault(sid, [])
+                sys_station = self.systable[sid]
+                for f in sys_station.frequencies():
+                    if f.khz not in alloc:
+                        ext_freqs.append(f.khz)
+        return inactive
+
     def active_station_data(self, station_key: Union[int, str]) -> dict:
         data: dict[str, Any] = {
             'last_updated': 0,
         }
-        for lookup in self.tables:
-            try:
-                station = lookup[station_key]
-            except KeyError:
-                continue
-            data['id'] = station.id
-            data['name'] = station.name
-            if data['last_updated'] < station.last_updated:
-                data['last_updated'] = station.last_updated
-                data['when'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        station = self[station_key]
+        data['id'] = station.id
+        name = station.name or hfdl_observer.hfdl.STATIONS.get(station.id).get('name')
+        if name is None:
+            # hacky way to backfill. Should never be needed?
+            station_data = self.cached_station_strata[station.id]
+            for station_stratum in station_data.values():
+                for node in station_stratum:
+                    if node.name is not None:
+                        name = node.name
+                        break
+        data['name'] = name
+        data['last_updated'] = station.last_updated
+        data['when'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         data['frequencies'] = {
-            'active': sorted(self.active_frequencies(station_key))
+            'active': sorted(self.active_frequencies(station_key)),
+            'stratum': station.stratum.value,
+            'update_source': station.update_source,
         }
+        # for lookup in self.tables:
+        #     try:
+        #         station = lookup[station_key]
+        #     except KeyError:
+        #         continue
+        #     data['id'] = station.id
+        #     data['name'] = station.name
+        #     if data['last_updated'] < station.last_updated:
+        #         data['last_updated'] = station.last_updated
+        #         data['when'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        # data['frequencies'] = {
+        #     'active': sorted(self.active_frequencies(station_key)),
+        #     'stratum': station.stratum.value,
+        #     'update_source': station.update_source,
+        # }
         return data
 
     def schedule_save(self, _: Any) -> None:
@@ -219,8 +256,14 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                 return True
         return False
 
-    def allocate_frequencies(self, station_frequencies: dict[int, list[int]]) -> list[hfdl_observer.data.Allocation]:
+    def allocate_frequencies(
+        self,
+        station_frequencies: dict[int, list[int]],
+        base_allocations: Optional[list[hfdl_observer.data.Allocation]] = None
+    ) -> list[hfdl_observer.data.Allocation]:
         allocations: list[hfdl_observer.data.Allocation] = []
+        for a in base_allocations or []:
+            allocations.append(self.parameters.allocation(a.frequencies))
         for sid in self.ranked_station_ids:
             for frequency in sorted(station_frequencies.get(sid, [])):
                 if self.is_ignored(frequency):
@@ -232,47 +275,56 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                     allocations.append(self.parameters.allocation([frequency]))
         return allocations
 
-    def orchestrate(self, allocations: list[hfdl_observer.data.Allocation]) -> list[hfdl_observer.data.Allocation]:
-        keeps = set()
+    def orchestrate(
+        self,
+        allocations: list[hfdl_observer.data.Allocation],
+        extended_allocations: list[hfdl_observer.data.Allocation]
+    ) -> tuple[list[hfdl_observer.data.Allocation], list[hfdl_observer.data.Allocation]]:
+        keeps = {}
         starts = []
         all_freq_count = sum(len(a.frequencies) for a in allocations)
-        listening_freq_count = 0
+        core_listening_count = 0
+        extended_listening_count = 0
 
-        desired_allocations = allocations[:len(self.proxies)]
+        desired_core_allocations = allocations[:len(self.proxies)]
+        desired_extended_allocations = extended_allocations[:len(self.proxies)]
 
-        for allocation in desired_allocations:
+        for core_allocation, extended_allocation in zip(desired_core_allocations, desired_extended_allocations):
             # print(allocation)
             for receiver in self.proxies:
-                if receiver.covers(allocation):
-                    keeps.add(receiver.name)
+                if receiver.covers(extended_allocation):
+                    keeps[receiver.name] = (core_allocation, extended_allocation)
                     break
             else:
-                starts.append(allocation)
+                starts.append((core_allocation, extended_allocation))
 
         available = []
         for receiver in self.proxies:
             if receiver.name in keeps:
-                if receiver.allocation and receiver.allocation.frequencies:  # by this point sb True, but mypy
-                    listening_freq_count += len(receiver.allocation.frequencies)
+                core_allocation, extended_allocation = keeps[receiver.name]
+                if core_allocation and core_allocation.frequencies:  # by this point sb True, but mypy
+                    core_listening_count += len(core_allocation.frequencies)
+                    extended_listening_count += len(extended_allocation.frequencies)
                 logger.debug(f'keeping {receiver}')
             else:
                 available.append(receiver)
 
-        for allocation, receiver in zip(starts, available, strict=False):
-            listening_freq_count += len(allocation.frequencies)
+        for data, receiver in zip(starts, available, strict=False):
+            core_allocation, extended_allocation = data
+            core_listening_count += len(core_allocation.frequencies)
+            extended_listening_count += len(extended_allocation.frequencies)
             if receiver.allocation:
                 self.reaper.remove_allocation(receiver.allocation)
                 receiver_freqs = receiver.allocation.frequencies
             else:
                 receiver_freqs = []
-            logger.info(f'assigned {allocation.frequencies} to {receiver.name} (was {receiver_freqs})')
-            receiver.listen(allocation.frequencies)
-            self.reaper.add_allocation(allocation)
-            # This does not need to be pubsub. The receiver is already a local proxy
-            # self.publish(f'receiver:{receiver.name}', ('listen', allocation.frequencies))
+            receiver.listen(extended_allocation.frequencies)
+            logger.info(f'assigned {extended_allocation.frequencies} to {receiver.name} (was {receiver_freqs})')
+            self.reaper.add_allocation(extended_allocation)
 
-        logger.info(f'Listening to {listening_freq_count} of {all_freq_count} active frequencies')
-        return desired_allocations
+        diff = extended_listening_count - core_listening_count
+        logger.info(f'Listening to {core_listening_count} of {all_freq_count} active frequencies (+{diff} extra)')
+        return desired_core_allocations, desired_extended_allocations
 
     def on_dead_receiver(self, frequencies: list[int]) -> None:
         for receiver in self.proxies:

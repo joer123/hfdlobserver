@@ -14,8 +14,9 @@ import shutil
 import yaml
 
 from typing import Union
-
 from copy import copy
+
+import hfdl_observer.env
 
 
 base_path: pathlib.Path = None  # type: ignore
@@ -145,6 +146,7 @@ def load(filepath: Union[str, pathlib.Path]) -> None:
 
     global base_path
     base_path = path.parent
+    hfdl_observer.env.base_path = base_path
 
     loaded = yaml.safe_load(path.read_text())
     merge(registry, loaded)

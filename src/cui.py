@@ -101,18 +101,16 @@ class ObserverDisplay:
     def update_totals(self, cumulative: packet_stats.CumulativePacketStats) -> None:
         table = rich.table.Table.grid(expand=True)
         table.add_column()  # title
-        # table.add_column(justify='center')  # Up / Down
-        # table.add_column(justify='center')  # Pos / NoPos
-        # table.add_column(justify='center')  # Squitters
         table.add_column(justify='right')   # Grand Total
         active_count = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
-        observed_count = str(self.cumulative_line.observed) if self.cumulative_line.observed is not None else '?'
+        core_count = str(self.cumulative_line.core_observed) if self.cumulative_line.core_observed is not None else '?'
+        bonus_count = f' +{self.cumulative_line.bonus_observed}' if self.cumulative_line.bonus_observed else ''
         table.add_row(
             rich.text.Text(" Totals (since start)", style='bold bright_white'),
             f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
             f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
             f"|  📰{cumulative.squitters}  "
-            f"|  🔎{observed_count}/{active_count}  "
+            f"|  🔎{core_count}/{active_count}{bonus_count}  "
             f"|  📶{cumulative.packets}  ",
             style='white on black'
         )
@@ -126,11 +124,13 @@ class ObserverDisplay:
             - (self.counts.row_count if self.counts else 0)
             - (self.status.row_count if self.status else 0)
             - (self.tty_bar.row_count if self.tty_bar else 0)
+            - (self.totals.row_count if self.totals else 0)
             - 1  # trailing blank
         )
-        entries = list(ring)[-available_space:]
-        for row in entries:
-            table.add_row(row)
+        if available_space > 0:
+            entries = list(ring)[-available_space:]
+            for row in entries:
+                table.add_row(row)
         self.tty = table
 
     def update_counts(self, table: rich.table.Table) -> None:
@@ -194,7 +194,8 @@ class ObserverDisplay:
 
 class CumulativeLine:
     display: ObserverDisplay
-    observed: Optional[int] = None
+    core_observed: Optional[int] = None
+    bonus_observed: Optional[int] = None
     active: Optional[int] = None
 
     def register(self, observer: main.Observer888, cumulative: packet_stats.CumulativePacketStats) -> None:
@@ -207,8 +208,10 @@ class CumulativeLine:
         if self.display:
             self.display.update_totals(self.cumulative)
 
-    def on_observing(self, observed_frequencies: list[int]) -> None:
-        self.observed = len(observed_frequencies)
+    def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
+        core, extended = observed
+        self.core_observed = len(core)
+        self.bonus_observed = len(extended) - len(core)
 
     def on_active(self, active_frequencies: list[int]) -> None:
         self.active = len(active_frequencies)
@@ -279,12 +282,16 @@ class Ticker(packet_stats.PacketCountRenderer):
                 row_text = rich.text.Text(style=SUBDUED_TEXT)
                 row_text.append(f'{data["active"]: ^3}', style=PROMINENT_TEXT)
                 station = self.packet_counter.observed_stations[freq]
-                sname = packet_stats.STATION_ABBREVIATIONS.get(station['id'], '')
+                sid = station['id'] or hfdl_observer.hfdl.STATIONS.get(int(freq), {}).get('id', 0)
+                sname = packet_stats.STATION_ABBREVIATIONS.get(sid, '')
                 if station.get('pending'):
+                    row_text.append(f'{sname.lower(): >9}', style='grey50')
+                elif not station['id']:
                     row_text.append(f'{sname.lower(): >9}', style='grey30')
                 else:
-                    row_text.append(f'{sname: >9}', style='grey66')
+                    row_text.append(f'{sname: >9}', style='grey74')
                 row_text.append(f'{freq: >6}', style=NORMAL_TEXT)
+
                 bins: list[str] = data["symbols"]  # type: ignore  # shut up, mypy
                 counts: list[int] = data["counts"]  # type: ignore  # shut up, mypy
                 for colno, (cnt, bn) in enumerate(zip(counts, bins)):

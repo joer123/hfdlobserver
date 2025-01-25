@@ -81,11 +81,12 @@ class PacketCounter:
         if packet.ground_station:
             self.observed_stations[packet.frequency] = packet.ground_station
 
-    def on_observing(self, observed_frequencies: list[int]) -> None:
-        self.observed_frequencies = sorted(observed_frequencies)
+    def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
+        core, extended = observed
+        self.observed_frequencies = sorted(extended)
 
-    def on_frequencies(self, assigned_frequencies: dict[int, list[int]]) -> None:
-        for sid, freqs in assigned_frequencies.items():
+    def on_frequencies(self, active_frequencies: dict[int, list[int]]) -> None:
+        for sid, freqs in active_frequencies.items():
             for freq in freqs:
                 self.observed_stations.setdefault(freq, {'id': sid, 'pending': True})
 
@@ -166,8 +167,12 @@ class PacketCountRenderer:
         raise NotImplementedError()
 
     def active_symbol(self, freq: int, counts: int) -> str:
-        if freq:
-            return '◉' if counts else '○'
+        if freq and freq in self.packet_counter.observed_stations:
+            if counts:
+                return '◉'
+            station = self.packet_counter.observed_stations[freq]
+            if station.get('pending'):
+                return '○'
         return '◌'
 
     def count_symbol(self, amount: int) -> str:

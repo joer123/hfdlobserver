@@ -7,7 +7,7 @@
 import datetime
 import logging
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 
 HFDL_CHANNEL_WIDTH: float = 2.4
@@ -112,6 +112,46 @@ class HFDLPacketInfo:
             subtype = "spdu" if self.packet.get('spdu') else ('lpdu' if self.packet.get('lpdu') else 'other')
         else:
             subtype = 'unknown'
-        gs = self.ground_station.get('name', 'n/a').split(',', 1)[0] if self.station else 'n/a'
         station = self.station or ""
+        if station:
+            gs = self.ground_station.get('name', None)
+            if gs is None:
+                gs_id = self.ground_station.get('id', -1)
+                gs = STATIONS.get(gs_id).get('name', 'n/a')
+            gs = gs.split(',', 1)[0]
+        else:
+            gs = 'unknown'
         return f'<HFDL/{subtype} {station}@{self.timestamp} {self.frequency}kHz ({self.snr:.1f}dB) {direction} {gs}>'
+
+
+class StationLookup:
+    by_id: dict[int, dict]
+    by_freq: dict[int, dict]
+
+    def update(self, systable: dict[int, Any]) -> None:
+        self.by_id = systable
+        self.by_freq = {}
+        for sid, station in systable.items():
+            for freq in station['frequencies']:
+                self.by_freq[freq] = station
+
+    def __getitem__(self, key: Union[str, int, float]) -> Any:
+        return self.get(key)
+
+    def get(self, key: Union[str, int, float], default: Optional[dict[int, Any]] = None) -> Any:
+        try:
+            k = int(key)
+            if k < 2000:
+                return self.by_id[k]
+            return self.by_freq[k]
+        except KeyError:
+            if default:
+                return default
+            raise
+        except AttributeError as err:
+            if default:
+                return default
+            raise KeyError(f'Mapping error for {key}') from err
+
+
+STATIONS = StationLookup()

@@ -12,6 +12,7 @@ import logging
 import re
 
 from collections.abc import Iterable
+from enum import Enum
 from typing import Any, Iterator, Optional, Sequence, Union
 
 import hfdl_observer.bus
@@ -22,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 GS_EXPIRY = 3600
 SQUITTER_FRAME_TIME = 32 * 6
+
+
+class Strata(Enum):
+    SYSTABLE = 0
+    CACHE = 1
+    PERFORMANCE = 2
+    SQUITTER = 3
+    SELF = 4
 
 
 class GroundStationFrequency:
@@ -64,6 +73,8 @@ class GroundStationFrequency:
 
 class GroundStation:
     last_updated: int = 0
+    update_source: Optional[str] = None
+    stratum: Strata = Strata.CACHE  # slightly smelly
     id: int
     name: Optional[str]
     _frequencies: dict[int, GroundStationFrequency]
@@ -167,7 +178,7 @@ class GroundStationTable(hfdl_observer.bus.Publisher):
             if autocreate:
                 station = GroundStation(ik, default_lifetime=self.LIFETIME)
                 try:
-                    loc = GS_LOCATIONS[ik]
+                    loc = hfdl_observer.hfdl.STATIONS[ik]
                 except KeyError:
                     pass
                 else:
@@ -199,17 +210,24 @@ class GroundStationTable(hfdl_observer.bus.Publisher):
         except KeyError:
             return []
 
-    @property
-    def stations(self) -> Iterable[GroundStation]:
-        return self.stations_by_id.values()
+    # @property
+    # def stations(self) -> Iterable[GroundStation]:
+    #     return self.stations_by_id.values()
+
+    def stations(self, stratum: Optional[Strata]) -> Iterable[GroundStation]:
+        for station in self.stations_by_id.values():
+            if stratum is None or station.stratum == stratum:
+                yield station
 
 
 class GroundStationStatus(hfdl_observer.bus.Publisher):
     _tables: list[GroundStationTable]
+    cached_station_strata: dict[int, dict[Strata, list[GroundStation]]]
 
     def __init__(self) -> None:
         super().__init__()
         self._tables = []
+        self.cached_station_strata = {}
 
     @property
     def tables(self) -> Iterator[GroundStationTable]:
@@ -221,6 +239,7 @@ class GroundStationStatus(hfdl_observer.bus.Publisher):
 
     def on_table_updated(self, table: GroundStationTable) -> None:
         self.publish('update', self)
+        self.populate_strata()
 
     def valid_frequencies(self, for_station: GroundStation) -> list[int]:
         # valid frequencies gives you the list of valids from all available tables.
@@ -257,8 +276,39 @@ class GroundStationStatus(hfdl_observer.bus.Publisher):
                 found.add(station)
         return sorted(found)
 
+    def get(self, station_key: Union[int, str]) -> GroundStation:
+        sid = int(station_key)
+        strata = reversed(list(s for s in Strata))
+        station_data = self.cached_station_strata[sid]
+        for stratum in strata:
+            try:
+                return station_data[stratum][0]
+            except (KeyError, IndexError):
+                pass
+        raise KeyError(f'{station_key} did not have any valid strata data')
+
+    def __getitem__(self, key: Union[int, str]) -> GroundStation:
+        return self.get(key)
+
+    def populate_strata(self) -> None:
+        for sid in self.station_ids:
+            ss = self.station_strata(sid)
+            self.cached_station_strata[sid] = ss
+
+    def station_strata(self, station_key: Union[int, str]) -> dict[Strata, list[GroundStation]]:
+        strata = collections.defaultdict(list)
+        for lookup in self.tables:
+            try:
+                station = lookup[station_key]
+            except KeyError:
+                continue
+            current_strata = station.stratum
+            strata[current_strata].append(station)
+        return strata
+
 
 class SquitterTable(GroundStationTable):
+
     def update(self, hfdl_packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         hfdl = hfdl_packet.packet
         last_updated = hfdl.get('t', {}).get('sec', 0)
@@ -271,13 +321,26 @@ class SquitterTable(GroundStationTable):
             new_freqs = sorted((int(sf['freq']) for sf in gs['freqs'] if 'freq' in sf))
             old_freqs = sorted(station.khz())
             if station.last_pseudoframe < (last_updated // SQUITTER_FRAME_TIME) or new_freqs != old_freqs:
-                station.last_updated = last_updated
-                station.name = gs['gs']['name']
-                station.set_frequencies(new_freqs)
-                logger.debug(f'squitter update for {station}')
-                any_updated = True
+                src_id = hfdl_packet.ground_station['id']
+                stn_id = int(station.id) if station.id else None
+                if self.should_process(src_id, stn_id):
+                    station.last_updated = last_updated
+                    station.update_source = src_id
+                    station.name = gs['gs']['name']
+                    station.set_frequencies(new_freqs)
+                    logger.debug(f'squitter update for {station}')
+                    station.stratum = Strata.SELF if stn_id == src_id else Strata.SQUITTER
+                    any_updated = True
         if any_updated:
             super().update(None)
+
+    def should_process(self, src_id: int, station_id: Optional[int]) -> bool:
+        return True
+
+
+class SelfSquitterTable(SquitterTable):
+    def should_process(self, src_id: int, station_id: Optional[int]) -> bool:
+        return src_id == station_id
 
 
 class UpdateTable(GroundStationTable):
@@ -292,7 +355,9 @@ class UpdateTable(GroundStationTable):
             if freqs:
                 station = self.get(gs['gs']['id'], autocreate=True)
                 station.last_updated = last_updated
+                station.update_source = 'hfnpdu'
                 station.name = gs['gs']['name']
+                station.stratum = Strata.PERFORMANCE
                 station.add_frequencies(freqs)
                 any_updated = True
                 logger.debug(f'performance update for {station}')
@@ -314,12 +379,11 @@ class AirframesStationTable(GroundStationTable):
                     last_updated += datetime.datetime.now(datetime.timezone.utc).timestamp()
                 station.last_updated = last_updated
                 station.name = gs['name']
+                station.update_source = gs.get('update_source', 'remote')
+                station.stratum = Strata(gs.get('stratum', Strata.CACHE))
                 station.set_frequencies(gs['frequencies']['active'])
                 # logger.debug(f'airframes update for {station}')
         super().update(None)
-
-
-GS_LOCATIONS: dict[int, Any] = {}
 
 
 class SystemTable(GroundStationTable):
@@ -340,24 +404,37 @@ class SystemTable(GroundStationTable):
         station_table = '{' + ''.join(lines).replace(',}', '}').replace(',]', ']').strip(',') + '}'
         # in theory it is now JSON decodable.
         data = json.loads(station_table)
+        hfdl_stations: dict[int, dict] = {}
         for gs in data['stations']:
             station = self.get(gs['id'], autocreate=True)
             station.name = gs['name']
             station.last_updated = int(datetime.datetime.now(datetime.timezone.utc).timestamp() - GS_EXPIRY)
+            station.update_source = 'systable'
             station.longitude = gs['lon']
             station.latitude = gs['lat']
-            GS_LOCATIONS.setdefault(gs['id'], {}).update({'longitude': station.longitude, 'latitude': station.latitude})
-            station.set_frequencies([int(f) for f in gs['frequencies']])
+            station.stratum = Strata.SYSTABLE
+            freqs = [int(f) for f in gs['frequencies']]
+            station.set_frequencies(freqs)
+            hfdl_stations.setdefault(gs['id'], {}).update({
+                'longitude': station.longitude,
+                'latitude': station.latitude,
+                'name': station.name,
+                'id': station.id,
+                'frequencies': freqs
+            })
+        hfdl_observer.hfdl.STATIONS.update(hfdl_stations)
         super().update(None)
 
 
 class ObserverTable(GroundStationTable):
     def update(self, source_table: GroundStationTable) -> None:
-        for gs in source_table.stations:
+        for gs in source_table.stations(None):
             if gs.last_updated:  # never add None (conf) or 0 (failed airframes)
                 station = self.get(gs.id, autocreate=True)
                 station.name = gs.name
                 station.last_updated = max(station.last_updated, gs.last_updated)
+                station.update_source = station.update_source
+                station.stratum = station.stratum
                 station.add_frequencies(gs.valid_frequencies)
         super().update(None)
 
