@@ -82,8 +82,6 @@ class ObserverDisplay:
         text = rich.text.Text()
         text.append(' 📡 ')
         text.append('HFDL.observer/888', style='bold')
-        text.append(' - ')
-        text.append('A multi-headed dumphfdl receiver for Web-888 devices', style='yellow')
 
         uptime = datetime.datetime.now() - start
         uptime -= datetime.timedelta(0, 0, uptime.microseconds)
@@ -148,14 +146,6 @@ class ObserverDisplay:
                 "minor": "black on gold1",
                 "none": "white on bright_black"
             }
-            # value_map = {
-            #     "0": "∘",
-            #     "1": "▁",
-            #     "2": "▃",
-            #     "3": "▅",
-            #     "4": "▆",
-            #     "5": "▓",
-            # }
             recent = data['-1']
             current = data['0']
             forecast1d = data['1']
