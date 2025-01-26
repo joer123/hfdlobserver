@@ -163,8 +163,8 @@ class GroundStationTable(hfdl_observer.bus.Publisher):
 
     def update(self, extra: Any) -> None:
         self.updates += 1
-        self.update_lookups()
         self.prune_expired()
+        self.update_lookups()
         self.publish('update', self)
 
     def get(self, key: Union[int, str], autocreate: bool = False) -> GroundStation:
@@ -317,20 +317,22 @@ class SquitterTable(GroundStationTable):
         if squitter:
             self.publish("event", ("squitter", hfdl_packet.station, last_updated))
         for gs in squitter.get('gs_status', []):
-            station = self.get(gs['gs']['id'], autocreate=True)
+            src_id = hfdl_packet.ground_station['id']
+            sid = gs['gs']['id']
+            stn_id = int(sid) if sid else None
+            if not self.should_process(src_id, stn_id):
+                continue
+            station = self.get(sid, autocreate=True)
             new_freqs = sorted((int(sf['freq']) for sf in gs['freqs'] if 'freq' in sf))
             old_freqs = sorted(station.khz())
             if station.last_pseudoframe < (last_updated // SQUITTER_FRAME_TIME) or new_freqs != old_freqs:
-                src_id = hfdl_packet.ground_station['id']
-                stn_id = int(station.id) if station.id else None
-                if self.should_process(src_id, stn_id):
-                    station.last_updated = last_updated
-                    station.update_source = src_id
-                    station.name = gs['gs']['name']
-                    station.set_frequencies(new_freqs)
-                    logger.debug(f'squitter update for {station}')
-                    station.stratum = Strata.SELF if stn_id == src_id else Strata.SQUITTER
-                    any_updated = True
+                station.last_updated = last_updated
+                station.update_source = src_id
+                station.name = gs['gs']['name']
+                station.set_frequencies(new_freqs)
+                logger.debug(f'squitter update for {station}')
+                station.stratum = Strata.SELF if stn_id == src_id else Strata.SQUITTER
+                any_updated = True
         if any_updated:
             super().update(None)
 
