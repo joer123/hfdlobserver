@@ -1,4 +1,4 @@
-# HFDL.observer/888
+# HFDL Observer
 
 A multi-headed dumphfdl receiver for use with Web-888 devices.
 
@@ -14,7 +14,7 @@ The Web-888 offers a solution for that. It combines the receiver of an RX-888 mk
 
 ## Features
 
-HFDL.observer/888 makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or other consumers) easy.
+HFDL Observer makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or other consumers) easy.
 
 It assigns frequencies to each of 13 virtual "receivers". The assignments are based on a list of currently active frequencies ranked by a user-configured station preference (generally stations nearer your Web-888 should have higher preference).
 
@@ -24,17 +24,17 @@ It watches the decoded HFDL packets for frequency updates. When the active frequ
 
 Optionally, it can also retrieve updated frequency lists from community source (such as hfdl.observer or airframes.io). This covers periods where squitters (frequency updates) may not be received by your station for a time.
 
-In general, there are around 30 frequencies active globally at a given time. HFDL.observer/888 allows your station to monitor (typically) 18-23 of them.
+In general, there are around 30 frequencies active globally at a given time. HFDL Observer allows your station to monitor (typically) 18-23 of them.
 
 Processing the entire HF frequency space would be very CPU-intensive. Taking advantage of the FPGA in Web-888 to select only the portions we're interested in means:
 
-- The data rate from the Web-888 to the device running HFDL.observer/888 is around 5Mbps.
+- The data rate from the Web-888 to the device running HFDL Observer is around 5Mbps.
 - The aggregate bandwidth that needs to be scanned by all virtual receivers is around 156kHz.
 - The CPU required for the virtual receivers is about ½ of 1 core of an Odroid M1S or Raspberry Pi4 (~13% total CPU)
 
 ## CUI
 
-HFDL.observer/888 also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
+HFDL Observer also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
 
 This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
 
@@ -121,7 +121,7 @@ The install script automates the following steps:
    4. clone `dumphfdl`, build, and install it.
 6. Run `./configure.py` to walk through some simple configuration questions.
 
-While several helper programs are installed, they are invoked via the operating system, HFDL.observer/888 makes no alteration to any of their code or operations, and connects only through standard mechanisms (file handles and sockets).
+While several helper programs are installed, they are invoked via the operating system, HFDL Observer makes no alteration to any of their code or operations, and connects only through standard mechanisms (file handles and sockets).
 
 ## Configuration
 
@@ -177,7 +177,7 @@ It then becomes a normal service named `hfdlobserver888`. Following the usual pa
 
 ## Implementation Notes
 
-The internal structure of HFDL.observer/888 is more complicated than it strictly needs to be. Much of this is derived from the desire to be fairly decoupled internall for future reuse. This project started as a less well defined desire to orchestrate a variety of different SDRs in sample HFDL frequencies, and it may be expanded to deal with less homogenous virtual receivers in the future. It should also abstract well to handling remote receivers, plus remote status and management (even later).
+The internal structure of HFDL Observer is more complicated than it strictly needs to be. Much of this is derived from the desire to be fairly decoupled internall for future reuse. This project started as a less well defined desire to orchestrate a variety of different SDRs in sample HFDL frequencies, and it may be expanded to deal with less homogenous virtual receivers in the future. It should also abstract well to handling remote receivers, plus remote status and management (even later).
 
 ## Acknowledgements
 

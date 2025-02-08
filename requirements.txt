@@ -1,5 +1,6 @@
 click
 numpy
+pony
 pyyaml
 requests
 rich

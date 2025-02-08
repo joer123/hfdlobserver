@@ -1,5 +1,5 @@
 # iqsources.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -31,7 +31,7 @@ class KiwiClientCommand(hfdl_observer.process.Command):
 
 class KiwiClient:
     config: collections.abc.Mapping
-    allocation: Optional[hfdl_observer.data.Allocation] = None
+    channel: Optional[hfdl_observer.data.ObservingChannel] = None
     pipe: Pipe
 
     def __init__(self, name: str, config: collections.abc.MutableMapping):
@@ -50,7 +50,7 @@ class KiwiClient:
         return settings.as_path('agc.yaml')
 
     def commandline(self) -> list[str]:
-        if not self.allocation or not self.allocation.frequencies:
+        if not self.channel or not self.channel.frequencies:
             return []
         # python3 kiwirecorder.py --nc -s n4dkd.asuscomm.com -p 8901 --log info -f 8927 -m iq --tlimit 60 --user kiwi_nc
         # | dumphfdl --iq-file - --sample-rate 12000 --sample-format CS16 --read-buffer-size 9600 --centerfreq 8927 8927
@@ -61,11 +61,11 @@ class KiwiClient:
             '--log', 'info',
             '-s', self.config['address'],
             '-p', str(self.config['port']),
-            '-f', str(self.allocation.center),
+            '-f', str(self.channel.center),
             '-m', 'iq',
             '-L', '-8000', '-H', '8000',
             '--OV',
-            '--agc-yaml', str(self.agc_file(self.allocation.center)),
+            '--agc-yaml', str(self.agc_file(self.channel.center)),
             '--user', self.config['username'],
             # '--tlimit', '120',
         ]
@@ -93,9 +93,9 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         os.close(self.pipe.write)
         pass
 
-    def listen(self, allocation: hfdl_observer.data.Allocation) -> asyncio.Task:
-        self.allocation = allocation
-        logger.debug(f'{self} starting {allocation}')
+    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+        self.channel = channel
+        logger.debug(f'{self} starting {channel}')
         logger.debug(f'{self} {self.commandline()}')
         return self.start()
 

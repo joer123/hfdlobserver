@@ -1,5 +1,5 @@
-# cul.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# cui.py
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -9,9 +9,8 @@ import collections
 import functools
 import datetime
 import logging
-import math
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, ItemsView, Optional, Sequence, Union
 
 import rich.console
 import rich.highlighter
@@ -23,15 +22,19 @@ import rich.style
 import rich.table
 import rich.text
 
-import hfdl_observer.hfdl
+import hfdl_observer.bus as bus
+import hfdl_observer.heat as heat
+import hfdl_observer.hfdl as hfdl
+import hfdl_observer.network as network
+import hfdl_observer.util as util
 
-import main
-import packet_stats
+import hfdlobserver
 import settings
 
 logger = logging.getLogger(__name__)
 start = datetime.datetime.now()
 SCREEN_REFRESH_RATE = 2
+MAP_REFRESH_PERIOD = 32.0 / 19.0  # every HFDL slot
 
 
 class ObserverDisplay:
@@ -45,15 +48,15 @@ class ObserverDisplay:
     def __init__(
         self,
         console: rich.console.Console,
-        ticker: 'Ticker',
+        heatmap: 'HeatMap',
         cumulative_line: 'CumulativeLine',
-        forecaster: hfdl_observer.bus.RemoteURLRefresher,
+        forecaster: bus.RemoteURLRefresher,
     ) -> None:
         self.console = console
-        self.ticker = ticker
+        self.heatmap = heatmap
         self.cumulative_line = cumulative_line
-        self.root = rich.layout.Layout("HFDL.observer/888")
-        self.ticker.display = self
+        self.root = rich.layout.Layout("HFDL Observer")
+        self.heatmap.display = self
         self.cumulative_line.display = self
         self.update_status()
         self.update_tty_bar()
@@ -67,9 +70,9 @@ class ObserverDisplay:
             t.add_row(self.totals)
         if self.counts:
             t.add_row(self.counts)
-        if self.tty_bar:
-            t.add_row(self.tty_bar)
         if self.tty:
+            if self.tty_bar:
+                t.add_row(self.tty_bar)
             t.add_row(self.tty)
         if t.row_count:
             self.root.update(t)
@@ -81,7 +84,7 @@ class ObserverDisplay:
         table.add_column(justify="right")
         text = rich.text.Text()
         text.append(' 📡 ')
-        text.append('HFDL.observer/888', style='bold')
+        text.append('HFDL Observer', style='bold')
 
         uptime = datetime.datetime.now() - start
         uptime -= datetime.timedelta(0, 0, uptime.microseconds)
@@ -93,22 +96,22 @@ class ObserverDisplay:
 
     def update_tty_bar(self) -> None:
         table = rich.table.Table.grid(expand=True)
-        table.add_row(' 📰 Log', style='bright_white on white')
+        table.add_row(' 📰 Log', style=PANE_BAR)
         self.tty_bar = table
 
-    def update_totals(self, cumulative: packet_stats.CumulativePacketStats) -> None:
+    def update_totals(self, cumulative: network.CumulativePacketStats) -> None:
         table = rich.table.Table.grid(expand=True)
         table.add_column()  # title
         table.add_column(justify='right')   # Grand Total
-        active_count = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
-        target_count = str(self.cumulative_line.target_observed) if self.cumulative_line.target_observed is not None else '?'
-        bonus_count = f' +{self.cumulative_line.bonus_observed}' if self.cumulative_line.bonus_observed else ''
+        actives = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
+        targets = str(self.cumulative_line.target_observed) if self.cumulative_line.target_observed is not None else '?'
+        untargets = f' +{self.cumulative_line.bonus_observed}' if self.cumulative_line.bonus_observed else ''
         table.add_row(
             rich.text.Text(" Totals (since start)", style='bold bright_white'),
             f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
             f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
             f"|  📰{cumulative.squitters}  "
-            f"|  🔎{target_count}/{active_count}{bonus_count}  "
+            f"|  🔎{targets}/{actives}{untargets}  "
             f"|  📶{cumulative.packets}  ",
             style='white on black'
         )
@@ -129,7 +132,9 @@ class ObserverDisplay:
             entries = list(ring)[-available_space:]
             for row in entries:
                 table.add_row(row)
-        self.tty = table
+            self.tty = table
+        else:
+            self.tty = None
 
     def update_counts(self, table: rich.table.Table) -> None:
         if table.row_count:
@@ -188,7 +193,7 @@ class CumulativeLine:
     bonus_observed: Optional[int] = None
     active: Optional[int] = None
 
-    def register(self, observer: main.Observer888, cumulative: packet_stats.CumulativePacketStats) -> None:
+    def register(self, observer: hfdlobserver.HFDLObserver, cumulative: network.CumulativePacketStats) -> None:
         self.cumulative = cumulative
         cumulative.subscribe('update', self.on_update)
         observer.subscribe('active', self.on_active)
@@ -198,131 +203,376 @@ class CumulativeLine:
         if self.display:
             self.display.update_totals(self.cumulative)
 
-    def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
-        target, field = observed
-        self.target_observed = len(target)
-        self.bonus_observed = len(field) - len(target)
+    def on_observing(self, observed: tuple[Sequence[int], Sequence[int]]) -> None:
+        targetted, untargetted = observed
+        self.target_observed = len(targetted)
+        self.bonus_observed = len(untargetted)
 
-    def on_active(self, active_frequencies: list[int]) -> None:
+    def on_active(self, active_frequencies: Sequence[int]) -> None:
         self.active = len(active_frequencies)
 
 
 BASE_HEADERS = ['NOW'] + (['   '] * 4 + [' ¦ '] + ['   '] * 4 + [' ┇ ']) * 12
-COUNT_HEADER = rich.style.Style.parse('bright_white on white')
-SUBDUED_TEXT = rich.style.Style.parse('bright_black on black')
+PANE_BAR = rich.style.Style.parse('bright_white on bright_black')
+SUBDUED_TEXT = rich.style.Style.parse('grey50 on black')
 NORMAL_TEXT = rich.style.Style.parse('white on black')
 PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
 
 
-class Ticker(packet_stats.PacketCountRenderer):
+class AbstractHeatMapFormatter:
+    source: heat.Table
+    strokes: dict[int, Optional[str]] = collections.defaultdict(lambda: None)
+    strokes.update({0: '┇', 5: '¦'})
+    root_str: str
+
+    @functools.cached_property
+    def max_count(self) -> int:
+        return max(
+            max(cell.value if cell else 0 for cell in row or [0]) for row in self.source.data.values()  # type: ignore
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.source.data) == 0
+
+    @functools.cache
+    def symbol(self, amount: int) -> str:
+        # there are 13 slots per 32 second frame.
+        # Assuming 1 minute bins and 1 packet per slot on average:
+        # we should not expect more than 25 packets per minute
+        # However, other bin sizes are possible as well so we have as many single character symbols as practical.
+        if amount == 0:
+            return '·'
+        if amount < 10:
+            return str(amount)
+        if amount < 36:
+            return chr(87 + amount)
+        if amount < 62:
+            return chr(29 + amount)
+        return '✽'
+
+    @functools.cache
+    def style(self, amount: int) -> rich.style.Style:
+        rgb = util.spectrum_colour(amount, max(25, self.max_count))
+        return rich.style.Style(bgcolor=f'rgb({",".join(str(i) for i in rgb)})', color='black')
+        # return rich.style.Style.parse(f'bright_black on rgb({",".join(str(i) for i in rgb)})')
+
+    def cumulative(self, row: Sequence[heat.Cell]) -> rich.text.Text:
+        return rich.text.Text(f'{sum(cell.value for cell in row): >4}')
+
+    def column_headers(self, root_str: str) -> Sequence[Union[None, rich.text.Text]]:
+        columns: list[Union[None, rich.text.Text]] = [
+            rich.text.Text(f" 📊 per {root_str: <7}"),
+            rich.text.Text('NOW', justify='center')
+        ]
+        for i in range(1, len(self.source.column_headers)):
+            title = self.strokes[i % 10] or ' '  # ] '┇    ¦    '[i % 10]
+            columns.append(rich.text.Text(f'{title: ^3}', justify='center'))
+        columns.append(None)
+        return columns
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> rich.text.Text:
+        raise NotImplementedError()
+
+    def cell(
+        self, index: int, cell: heat.Cell, row_header: heat.RowHeader
+    ) -> rich.text.Text:
+        style: Union[rich.style.Style, str] = 'bright_black on black'
+        stroke = self.strokes[index % 10]
+        if cell.value:
+            style = self.style(cell.value)
+            text = self.symbol(cell.value)
+        else:
+            text = stroke or '·'
+        return rich.text.Text(text, style=style, justify='center')
+
+    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[rich.text.Text]:
+        row_header = self.source.row_headers[row_id]
+        cells = [self.row_header(row_header, row_data)]
+        cells.extend(self.cell(ix, cell, row_header) for ix, cell in enumerate(row_data))
+        cells.append(self.cumulative(row_data))
+        return cells
+
+    def rows(self) -> ItemsView[Union[int, str], Sequence[heat.Cell]]:
+        return self.source.data.items()
+
+
+class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
+    source: heat.TableByFrequency
+
+    def __init__(
+        self,
+        bin_size: int,
+        num_bins: int,
+        targetted: Sequence[int],
+        untargetted: Sequence[int],
+        all_active: bool,
+        show_active_line: bool,
+        show_confidence: bool,
+        show_targetting: bool,
+        show_quiet: bool,
+    ) -> None:
+        self.bin_size = bin_size
+        self.source = heat.TableByFrequency(self.bin_size, num_bins)
+
+        def rowheader_factory(key: Union[int, str], tags: Sequence[str]) -> heat.RowHeader:
+            return heat.RowHeader(str(key), station_id=network.STATIONS[key].station_id, tags=tags)
+
+        self.source.tag_rows(targetted, ['targetted'], default_factory=rowheader_factory)
+        self.source.tag_rows(untargetted, ['untargetted'], default_factory=rowheader_factory)
+        self.source.tag_rows(
+            network.UPDATER.current_freqs(), ['active'], default_factory=rowheader_factory if all_active else None
+        )
+        self.show_active_line = show_active_line
+        self.show_confidence = show_confidence
+        self.show_targetting = show_targetting
+        self.show_quiet = show_quiet
+        self.source.fill_active_state()
+        self.source.sort()
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> rich.text.Text:
+        infix = ''
+        style = NORMAL_TEXT
+        if header.station_id:
+            infix = network.STATION_ABBREVIATIONS[header.station_id]
+        if 'targetted' in header.tags or any('targetted' in cell.tags for cell in row):
+            if any(cell.value for cell in row):
+                symbol = '▣'  # ▣🞔□⬚
+                style = PROMINENT_TEXT
+            else:
+                symbol = '🞔'
+        elif 'active' in header.tags or any('active' in cell.tags for cell in row):
+            symbol = '□'
+        else:
+            symbol = '⬚'
+            infix = infix.lower()
+            style = SUBDUED_TEXT
+        if not self.show_targetting:
+            symbol = ' '
+        stratum = ' '
+        if self.show_confidence:
+            if 'local' in header.tags:
+                stratum = '●'  # ◉
+            elif 'network' in header.tags:
+                stratum = '◐'  # ◒⊙⬓
+            elif 'guess' in header.tags:
+                stratum = '○'
+        return rich.text.Text(f'{symbol}{infix: >9}{header.label: >6} {stratum} ', style=style)
+
+    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[rich.text.Text]:
+        if self.show_quiet or any(cell.value for cell in row_data):
+            return super().row(row_id, row_data)
+        return []
+
+    def cell(
+        self, index: int, cell: heat.Cell, row_header: heat.RowHeader
+    ) -> rich.text.Text:
+        style: Union[rich.style.Style, str] = 'bright_black on black'
+        stroke = self.strokes[index % 10]
+        if cell.value:
+            style = self.style(cell.value)
+            text = self.symbol(cell.value)
+        elif 'active' in cell.tags and self.show_active_line:
+            if 'targetted' in row_header.tags:
+                text = f'─{stroke or "─"}─'
+            else:
+                text = f'⠒{stroke or "⠒"}⠒'  # ┄┄┄' # ╴╴╴'  # ┈┈┈
+        else:
+            text = stroke or '·'
+        return rich.text.Text(text, style=style, justify='center')
+
+
+class HeatMapByBandFormatter(AbstractHeatMapFormatter):
+    source: heat.TableByBand
+
+    def __init__(
+        self,
+        bin_size: int,
+        num_bins: int,
+        all_bands: bool,
+    ) -> None:
+        self.bin_size = bin_size
+        self.source = heat.TableByBand(self.bin_size, num_bins)
+
+        def rowheader_factory(key: Union[int, str], tags: Sequence[str]) -> heat.RowHeader:
+            return heat.RowHeader(str(key), tags=tags)
+
+        if all_bands:
+            bands: set[int] = set()
+            for allocated in network.STATIONS.assigned().values():
+                bands.update(int(f // 1000) for f in allocated)
+            self.source.tag_rows(bands, ['band'], default_factory=rowheader_factory)
+        self.source.sort()
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> rich.text.Text:
+        if any(cell.value for cell in row):
+            style = PROMINENT_TEXT
+        else:
+            style = NORMAL_TEXT
+        return rich.text.Text(f' {header.label: >13} MHz ', style=style)
+
+
+class HeatMapByStationFormatter(AbstractHeatMapFormatter):
+    source: heat.TableByStation
+
+    def __init__(
+        self,
+        bin_size: int,
+        num_bins: int,
+    ) -> None:
+        self.bin_size = bin_size
+        self.source = heat.TableByStation(self.bin_size, num_bins)
+        self.source.sort()
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> rich.text.Text:
+        if any(cell.value for cell in row):
+            style = PROMINENT_TEXT
+        else:
+            style = NORMAL_TEXT
+        return rich.text.Text(f' {header.label.split(",", 1)[0].strip(): >17} ', style=style)
+
+
+class HeatMapByAgentFormatter(AbstractHeatMapFormatter):
+    source: heat.TableByAgent
+
+    def __init__(
+        self,
+        bin_size: int,
+        num_bins: int,
+    ) -> None:
+        self.bin_size = bin_size
+        self.source = heat.TableByAgent(self.bin_size, num_bins)
+        self.source.sort()
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> rich.text.Text:
+        if any(cell.value for cell in row):
+            style = PROMINENT_TEXT
+        else:
+            style = NORMAL_TEXT
+        return rich.text.Text(f' {header.label: >17} ', style=style)
+
+
+class HeatMap:
+    config: dict
     last_render_time: float = 0
     bin_size: int = 60
+    data_source: Callable[[int], AbstractHeatMapFormatter]
     display: ObserverDisplay
+    refresh_period = 64  # two frames.
+    task: Optional[asyncio.Task] = None
+    targetted_frequencies: Sequence[int]
+    untargetted_frequencies: Sequence[int]
 
     def __init__(self, config: dict) -> None:
-        super().__init__()
+        self.config = config
+        mode = self.config.get("display_mode", "frequency")
+        callable_mode = getattr(self, f'by_{mode}', None)
+        if not callable(callable_mode):
+            raise ValueError(f'display mode not supported: {mode}')
+        self.data_source = callable_mode
         self.bin_size = min(3600, max(60, int(config.get('bin_size', 60))))
+        self.refresh_period = min(self.refresh_period, self.bin_size)
+        self.targetted_frequencies = []
+        self.untargetted_frequencies = []
 
-    def register(self, observer: main.Observer888, packet_counter: packet_stats.BinnedPacketCounter) -> None:
-        self.register_packet_counter(packet_counter)
+    def by_frequency(self, num_bins: int) -> AbstractHeatMapFormatter:
+        return HeatMapByFrequencyFormatter(
+            self.bin_size,
+            num_bins,
+            self.targetted_frequencies,
+            self.untargetted_frequencies,
+            util.tobool(self.config.get('show_all_active', True)),
+            util.tobool(self.config.get('show_active_line', True)),
+            util.tobool(self.config.get('show_confidence', True)),
+            util.tobool(self.config.get('show_targetting', True)),
+            util.tobool(self.config.get('show_quiet', True)),
+        )
 
+    def by_band(self, num_bins: int) -> AbstractHeatMapFormatter:
+        return HeatMapByBandFormatter(
+            self.bin_size,
+            num_bins,
+            util.tobool(self.config.get('show_all_bands', True))
+        )
+
+    def by_station(self, num_bins: int) -> AbstractHeatMapFormatter:
+        return HeatMapByStationFormatter(self.bin_size, num_bins)
+
+    def by_agent(self, num_bins: int) -> AbstractHeatMapFormatter:
+        return HeatMapByAgentFormatter(self.bin_size, num_bins)
+
+    def register(self, observer: hfdlobserver.HFDLObserver) -> None:
         observer.subscribe('packet', self.on_hfdl)
         observer.subscribe('observing', self.on_observing)
-        # observer.subscribe('frequencies', self.on_frequencies)
 
-    def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
+    def on_hfdl(self, packet: hfdl.HFDLPacketInfo) -> None:
         if not self.task:
             self.start()
         self.maybe_render()
 
     def on_observing(self, observed: tuple[list[int], list[int]]) -> None:
+        self.targetted_frequencies, self.untargetted_frequencies = observed
         if not self.task:
             self.start()
 
-    @functools.cache
-    def style(self, value: int, max_value: int = 0) -> Optional[rich.style.Style]:
-        # with 13 slots per 32 seconds, we should not see any more than 25 packets per minute on any given frequency
-        if value:
-            rgb = spectrum_colour(value, max(25, max_value))
-            return rich.style.Style.parse(f'black on rgb({",".join(str(i) for i in rgb)})')
-        return None
-
     def maybe_render(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if now - self.last_render_time > SCREEN_REFRESH_RATE / 2.0:
+        if now - self.last_render_time > MAP_REFRESH_PERIOD:
             self.render()
 
     def render(self) -> None:
-        table = rich.table.Table.grid(expand=True)
-        width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
+        # width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
+        width = self.display.current_width - (3 + 9 + 6 + 4 + 1)
         possible_bins = width // 3
-        headers, rows = self.packet_counter.binned_counts(-self.bin_size * possible_bins, self.bin_size)
         if self.bin_size > 60:
             bin_str = f'{self.bin_size}s'
         else:
             bin_str = 'minute'
-        if rows:
-            decorated_table = self.decorated_counts_table(headers, rows)
+        source = self.data_source(possible_bins)
+        if not source.is_empty:
+            table = rich.table.Table.grid()
 
-            display_headers = BASE_HEADERS[:len(headers)]
+            columns = source.column_headers(bin_str)
+            table.add_row(*columns, style=PANE_BAR)
 
-            table.add_row(f" 📊 per {bin_str: <7}   {''.join(display_headers)}", style=COUNT_HEADER)
-            max_count: int = max(max(data["counts"]) for data in decorated_table.values())  # type: ignore  # shut up
-            for freq, data in decorated_table.items():
-                row_text = rich.text.Text(style=SUBDUED_TEXT)
-                row_text.append(f'{data["state"]: ^3}', style=PROMINENT_TEXT)
-                station = self.packet_counter.observed_stations[freq]
-                sid = station['id'] or hfdl_observer.hfdl.STATIONS.get(int(freq), {}).get('id', 0)
-                sname = packet_stats.STATION_ABBREVIATIONS.get(sid, '')
-                if station.get('pending'):
-                    row_text.append(f'{sname.lower(): >9}', style='grey50')
-                elif not station['id']:
-                    row_text.append(f'{sname.lower(): >9}', style='grey30')
-                else:
-                    row_text.append(f'{sname: >9}', style='grey74')
-                row_text.append(f'{freq: >6}', style=NORMAL_TEXT)
-
-                bins: list[str] = data["symbols"]  # type: ignore  # shut up, mypy
-                counts: list[int] = data["counts"]  # type: ignore  # shut up, mypy
-                for colno, (cnt, bn) in enumerate(zip(counts, bins)):
-                    cell = f'{bn: ^3}' if (cnt > 0 or colno == 0 or colno % 5 != 0) else display_headers[colno]
-                    row_text.append(cell, style=self.style(cnt, max_count))
-                tot = data["total"]
-                if tot:
-                    row_text.append(f'{tot: >4}', style=NORMAL_TEXT)
-                table.add_row(row_text)
-            self.display.update_counts(table)
-            self.last_render_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+            for key, row in source.rows():
+                cells = source.row(key, row)
+                if cells:
+                    table.add_row(*cells, style="white on black")
         else:
-            table.add_row(f" 📊 per {bin_str}", style=COUNT_HEADER)
+            table = rich.table.Table.grid(expand=True)
+            table.add_row(f" 📊 per {bin_str}", style=PANE_BAR)
             table.add_row(" Awaiting data...")
         self.display.update_counts(table)
 
+    async def run(self) -> None:
+        try:
+            while True:
+                self.render()
+                await asyncio.sleep(self.refresh_period)
+        except Exception as exc:
+            logger.error('oops', exc_info=exc)
+            raise
 
-def hsv_rgb(hue: float, saturation: float, value: float) -> tuple[float, float, float]:
-    i = math.floor(hue * 6)
-    f = hue * 6 - i
-    p = value * (1 - saturation)
-    q = value * (1 - f * saturation)
-    t = value * (1 - (1 - f) * saturation)
-    r, g, b = [
-        (value, t, p),
-        (q, value, p),
-        (p, value, t),
-        (p, q, value),
-        (t, p, value),
-        (value, p, q),
-    ][int(i % 6)]
-    return r, g, b
+    def stop(self) -> None:
+        if self.task:
+            self.task.cancel()
+            self.task = None
 
-
-def spectrum_colour(value: int, max_value: int) -> tuple[int, int, int]:
-    effective = max_value - min(max(0, value), max_value)
-    start_hue = 280
-    hue_range = 300
-    hue = (start_hue + hue_range * effective / max_value) % 360
-    hsv = hsv_rgb(hue / 360, 1, 1)
-    return (int(hsv[0] * 255), int(hsv[1] * 255), int(hsv[2] * 255))
+    def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        if not self.task:
+            loop = loop or asyncio.get_running_loop()
+            self.task = loop.create_task(self.run())
 
 
 class ConsoleRedirector(rich.console.Console):
@@ -348,7 +598,7 @@ class ConsoleRedirector(rich.console.Console):
 
 
 class RichLive(rich.live.Live):
-    on_refresh: Optional[list[Callable]] = None
+    on_refresh: Optional[Sequence[Callable]] = None
 
     def refresh(self) -> None:
         for callback in self.on_refresh or []:
@@ -367,11 +617,10 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         highlighter=rich.highlighter.NullHighlighter(),
         enable_link_path=False,
     )
-    ticker = Ticker(cui_settings['ticker'])
-    ticker.refresh_period = 60
+    ticker = HeatMap(cui_settings['ticker'])
     cumulative_line = CumulativeLine()
 
-    forecaster = hfdl_observer.bus.RemoteURLRefresher('https://services.swpc.noaa.gov/products/noaa-scales.json', 617)
+    forecaster = bus.RemoteURLRefresher('https://services.swpc.noaa.gov/products/noaa-scales.json', 617)
 
     display = ObserverDisplay(console, ticker, cumulative_line, forecaster)
 
@@ -390,11 +639,11 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     )
 
     def observing(
-        observer: main.Observer888,
-        packet_counter: packet_stats.BinnedPacketCounter,
-        cumulative: packet_stats.CumulativePacketStats,
+        observer: hfdlobserver.HFDLObserver,
+        # packet_counter: network.BinnedPacketCounter,
+        cumulative: network.CumulativePacketStats,
     ) -> None:
-        ticker.register(observer, packet_counter)
+        ticker.register(observer)  # , packet_counter)
         cumulative_line.register(observer, cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
 
@@ -406,7 +655,7 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
             display.update_status,
             display.update,
         ]
-        main.observe(on_observer=observing)
+        hfdlobserver.observe(on_observer=observing)
 
 
 if __name__ == '__main__':

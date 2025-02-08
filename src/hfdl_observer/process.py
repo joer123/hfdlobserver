@@ -1,5 +1,5 @@
 # hfdl_observer/hfdl.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -86,7 +86,7 @@ class Command:
         try:
             while not self.killed:
                 # execution context allows you to set up such things as temp fifos for stdout parsing. This is not
-                # currently used by the current observer888, but was used with the earlier dumbhfdl.
+                # currently used by the current HFDL Observer, but was used with the earlier dumbhfdl.
                 with self.execution_context_manager() as execution_context:
                     if self.on_prepare:
                         await self.on_prepare()

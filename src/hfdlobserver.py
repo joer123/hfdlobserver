@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # main.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -22,38 +22,50 @@ import click
 
 import hfdl_observer.bus
 import hfdl_observer.data
+import hfdl_observer.heat
 import hfdl_observer.hfdl
 import hfdl_observer.listeners
 import hfdl_observer.manage
+import hfdl_observer.network as network
+
+import hfdl_observer.orm as orm
 
 import receivers
 import settings
-import packet_stats
 
 
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
 
 
-class Observer888(hfdl_observer.bus.Publisher):
+class HFDLObserver(hfdl_observer.bus.Publisher):
     local_receivers: list[receivers.LocalReceiver]
     proxies: list[hfdl_observer.manage.ReceiverProxy]
-    parameters: hfdl_observer.data.Parameters
+    parameters: hfdl_observer.data.ObserverParameters
     running: bool = True
+
+    availability_watcher: orm.NetworkUpdater
+    packet_watcher: orm.PacketWatcher
 
     def __init__(self, config: collections.abc.Mapping) -> None:
         super().__init__()
         self.config = config
-        self.active_ground_stations = hfdl_observer.manage.ActiveGroundStations(config['tracker'])
-        self.active_ground_stations.subscribe('frequencies', self.on_frequencies)
+        self.network_updater = orm.NetworkUpdater()
+        network.UPDATER = self.network_updater
+        self.packet_watcher = orm.PacketWatcher()
+        hfdl_observer.data.PACKET_WATCHER = self.packet_watcher
+        self.network_overview = hfdl_observer.manage.NetworkOverview(config['tracker'], self.network_updater)
+        self.network_overview.subscribe('frequencies', self.on_frequencies)
+        # self.network_overview.subscribe('frequencies', self.ministats)
+
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
         self.hfdl_consumers = [
             hfdl_observer.listeners.HFDLPacketConsumer(
                 [hfdl_observer.listeners.HFDLPacketConsumer.any_in('spdu', 'freq_data')],
-                [self.active_ground_stations.on_hfdl],
+                [self.network_updater.on_hfdl],
             ),
             hfdl_observer.listeners.HFDLPacketConsumer(
                 [lambda line: True],
-                [self.on_hfdl],
+                [self.on_hfdl, self.packet_watcher.on_hfdl],
             ),
         ]
         self.conductor = hfdl_observer.manage.SimpleConductor(config['conductor'])
@@ -78,18 +90,30 @@ class Observer888(hfdl_observer.bus.Publisher):
         self.proxies.append(proxy)
         self.conductor.add_receiver(proxy)
 
-    def on_frequencies(self, stations: dict[int, list[int]]) -> None:
-        allocations = self.conductor.allocate_frequencies(stations)
-        # field allocations come from the "inactive" system table frequencies
-        inactive_freqs = self.active_ground_stations.inactive_station_frequencies
-        field_allocations = self.conductor.allocate_frequencies(inactive_freqs, allocations)
-        target_allocated, field_allocated = self.conductor.orchestrate(allocations, field_allocations)
-        self.publish('active', list(itertools.chain(*stations.values())))
-        self.publish('observing', (
-            list(itertools.chain.from_iterable(a.frequencies for a in target_allocated)),
-            list(itertools.chain.from_iterable(a.frequencies for a in field_allocated))
-        ))
-        self.publish('frequencies', stations)
+    def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
+        channels = self.conductor.channels(targetted_freqs)
+        channels = self.conductor.channels(network.STATIONS.assigned(), channels)
+        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
+
+        chosen_channels = self.conductor.orchestrate(channels)
+        targetted = []
+        untargetted = []
+        for channel in chosen_channels:
+            for frequency in channel.frequencies:
+                if network.STATIONS.is_active(frequency):
+                    targetted.append(frequency)
+                else:
+                    untargetted.append(frequency)
+
+        self.publish('orchestrated', {
+            'targetted': targetted,
+            'untargetted': untargetted,
+            'active': all_active,
+        })
+
+        self.publish('active', all_active)
+        self.publish('observing', (targetted, untargetted))
+        self.publish('frequencies', targetted_freqs)
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         self.publish('packet', packet)
@@ -100,9 +124,14 @@ class Observer888(hfdl_observer.bus.Publisher):
         logger.error(f'Bailing due to error on receiver {receiver}: {error}')
         self.running = False
 
+    # def ministats(self, _: Any) -> None:
+    #     table = hfdl_observer.heat.by_frequency(60, 10)
+    #     for line in str(table).split('\n'):
+    #         logger.info(f'{line}')
+
     def start(self) -> None:
-        self.active_ground_stations.start()
-        self.hfdl_listener.start(self.hfdl_consumers)  # self.active_ground_stations.on_hfdl)
+        self.network_overview.start()
+        self.hfdl_listener.start(self.hfdl_consumers)
         self.conductor.reaper.start()
 
     def kill(self) -> None:
@@ -111,7 +140,7 @@ class Observer888(hfdl_observer.bus.Publisher):
             receiver.kill()
 
 
-async def async_observe(observer: Observer888) -> None:
+async def async_observe(observer: HFDLObserver) -> None:
     logger.info("Starting observer")
 
     try:
@@ -133,26 +162,22 @@ def cancel_all_tasks() -> None:
 
 def observe(
     on_observer: Optional[Callable[[
-        Observer888, packet_stats.BinnedPacketCounter, packet_stats.CumulativePacketStats
+        HFDLObserver,
+        network.CumulativePacketStats
     ], None]] = None
 ) -> None:
     loop = asyncio.get_event_loop()
 
-    observer = Observer888(settings.registry['observer888'])
+    observer = HFDLObserver(settings.registry['observer'])
 
-    packet_counter = packet_stats.BinnedPacketCounter()
-    observer.subscribe('packet', packet_counter.on_hfdl)
-    observer.subscribe('observing', packet_counter.on_observing)
-    observer.subscribe('frequencies', packet_counter.on_frequencies)
-    cumulative = packet_stats.CumulativePacketStats()
+    cumulative = network.CumulativePacketStats()
     observer.subscribe('packet', cumulative.on_hfdl)
 
     if on_observer:
-        on_observer(observer, packet_counter, cumulative)
+        on_observer(observer, cumulative)
     else:
-        log_counter = packet_stats.LoggedPacketCounts()
-        log_counter.register_packet_counter(packet_counter)
-        log_counter.start(loop)
+        # initialize headless
+        pass
 
     main_task = asyncio.ensure_future(async_observe(observer))
     for signal in [SIGINT, SIGTERM]:

@@ -1,5 +1,5 @@
 # receivers.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -39,7 +39,7 @@ class LocalReceiver(hfdl_observer.bus.Publisher):
         name: str,
         config: collections.abc.MutableMapping,
         listener: hfdl_observer.data.ListenerConfig,
-        parameters: hfdl_observer.data.Parameters
+        parameters: hfdl_observer.data.ObserverParameters
     ) -> None:
         self.config = config
         self.name = name
@@ -73,7 +73,7 @@ class Web888Receiver(LocalReceiver):
         name: str,
         config: collections.abc.MutableMapping,
         listener: hfdl_observer.data.ListenerConfig,
-        parameters: hfdl_observer.data.Parameters
+        parameters: hfdl_observer.data.ObserverParameters
     ) -> None:
         super().__init__(name, config, listener, parameters)
         self.tasks = []
@@ -90,11 +90,11 @@ class Web888Receiver(LocalReceiver):
         self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
         self.stop()
         self.frequencies = frequencies
-        self.allocation = self.parameters.allocation(frequencies)
+        self.channel = self.parameters.channel(frequencies)
         self.start()
         self.logger.debug(f'switched to {frequencies}')
 
-        # self.publish(f'receiver:{self.name}', ('listening', self.allocation.frequencies))
+        # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
     def start(self) -> None:
         # if self.tasks:
@@ -128,7 +128,7 @@ class DummyReceiver(Web888Receiver):
         self.decoder = decoders.DummyDecoder(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> None:
-        pass
+        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
 
 class Web888ExecReceiver(Web888Receiver):
@@ -147,21 +147,21 @@ class Web888ExecReceiver(Web888Receiver):
             # we have not been asked to stop or kill, so this task has ended prematurely.
             self.tasks.remove(task)
             if not self.tasks:
-                # there are no more tasks, so there's no valid allocation
+                # there are no more tasks, so there's no valid channel
                 self.frequencies = []
-                self.allocation = self.parameters.allocation([])
+                self.channel = self.parameters.channel([])
                 self.publish(f'receiver:{self.name}', ('listening', self.frequencies))
 
     async def run(self) -> None:
-        self.publish(f'receiver:{self.name}', ('listening', self.allocation.frequencies))
+        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
-        client_task = self.client.listen(self.allocation)
+        client_task = self.client.listen(self.channel)
         async with self.client.running_condition:
             self.tasks.append(client_task)
             client_task.add_done_callback(self.on_task_done)
             await self.client.running_condition.wait()
             self.decoder.iq_fd = self.client.pipe.read
-            decoder_task = self.decoder.listen(self.allocation)
+            decoder_task = self.decoder.listen(self.channel)
             self.tasks.append(decoder_task)
             decoder_task.add_done_callback(self.on_task_done)
 

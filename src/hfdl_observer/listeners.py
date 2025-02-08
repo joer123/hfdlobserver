@@ -1,5 +1,5 @@
 # hfdl_observer/listeners.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -82,7 +82,7 @@ class UDPProtocol(asyncio.protocols.BaseProtocol):
                 logger.info(f"packet {packet}")
                 # self.on_hfdl(packet)
                 for consumer in self.consumers:
-                    consumer.consume(line, packet)
+                    asyncio.get_running_loop().call_soon(consumer.consume, line, packet)
         if tail and len(tail) < 65536:  # primitive/naive stuffing check.
             self.buffers[addr] = tail
         else:

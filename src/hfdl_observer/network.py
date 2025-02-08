@@ -1,0 +1,356 @@
+# hfdl_observer/py
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
+# see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
+# TL;DR: BSD 3-clause
+#
+
+import dataclasses
+import datetime
+import logging
+
+from enum import Enum
+from typing import Optional, Sequence, Union
+
+import hfdl_observer.bus as bus
+import hfdl_observer.hfdl as hfdl
+import hfdl_observer.util as util
+
+logger = logging.getLogger(__name__)
+
+
+class Strata(Enum):
+    SYSTABLE = 0
+    CACHE = 1
+    PERFORMANCE = 2
+    SQUITTER = 3
+    SELF = 4
+
+
+AVAILABILITY_LIFETIMES = {
+    Strata.SYSTABLE.value: datetime.timedelta(seconds=1),
+    Strata.CACHE.value: datetime.timedelta(hours=1),
+    Strata.PERFORMANCE.value: datetime.timedelta(minutes=30),
+    Strata.SQUITTER.value: datetime.timedelta(hours=1),
+    Strata.SELF.value: datetime.timedelta(hours=1),
+}
+
+
+STATION_ABBREVIATIONS = {
+    1: 'SANFRAN',
+    2: 'MOLOKAI',
+    3: 'REYKJVK',
+    4: 'RIVERHD',
+    5: 'AUCKLAND',
+    6: 'HATYAI',
+    7: 'SHANNON',
+    8: 'JOBURG',
+    9: 'BARROW',
+    10: 'MUAN',
+    11: 'ALBROOK',
+    13: 'SNTACRUZ',
+    14: 'KRASNOY',
+    15: 'MUHARRAQ',
+    16: 'AGANA',
+    17: 'CANARIAS',
+}
+
+
+PosixTimestamp = int
+HFDL_FRAME_TIME = 32
+
+
+@dataclasses.dataclass
+class Station:
+    station_id: int
+    station_name: str
+    latitude: float
+    longitude: float
+    assigned_frequencies: list[int]
+    active_frequencies: list[int]
+
+    def __str__(self) -> str:
+        return f"<Station #{self.station_id} {self.station_name}>"
+
+    def is_active(self, frequency: int) -> bool:
+        return frequency in self.active_frequencies
+
+    def is_assigned(self, frequency: int) -> bool:
+        return frequency in self.assigned_frequencies
+
+    def update(self, other: 'Station') -> None:
+        if self is not other:
+            self.station_name = other.station_name or self.station_name
+            self.latitude = other.latitude or self.latitude
+            self.longitude = other.longitude or self.longitude
+            self.assigned_frequencies = other.assigned_frequencies or self.assigned_frequencies
+            self.update_active(other.active_frequencies)
+
+    def update_active(self, frequencies: list[int]) -> None:
+        if frequencies:
+            self.active_frequencies = frequencies
+
+
+@dataclasses.dataclass
+class StationAvailability:
+    station_id: int
+    stratum: int
+    valid_at: datetime.datetime
+    frequencies: list[int]
+    agent: str
+    from_station: Optional[int]
+    valid_to: Optional[datetime.datetime] = None
+
+    def as_station(self) -> Station:
+        base = STATIONS[self.station_id]
+        return Station(
+            station_id=base.station_id,
+            station_name=base.station_name,
+            latitude=base.latitude,
+            longitude=base.longitude,
+            assigned_frequencies=base.assigned_frequencies,
+            active_frequencies=self.frequencies
+        )
+
+
+# protocol, really.
+class AbstractNetworkUpdater(bus.Publisher):
+    def current(self) -> Sequence[StationAvailability]:
+        raise NotImplementedError()
+
+    def current_freqs(self) -> Sequence[int]:
+        raise NotImplementedError()
+
+    def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
+        raise NotImplementedError()
+
+    def add(self, availability: StationAvailability) -> bool:
+        raise NotImplementedError()
+
+    def updated(self, availabilities: Optional[Sequence[StationAvailability]] = None) -> None:
+        if availabilities is None:
+            STATIONS.refresh()
+        else:
+            STATIONS.update_active(self.current())
+            self.publish('availability', util.now())
+
+    def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
+        valid_at = util.make_naive_utc(util.timestamp_to_datetime(packet_info.timestamp))
+        squitter = packet_info.get('spdu.gs_status', default=[])
+        performance = packet_info.get('lpdu.hfnpdu.freq_data', default=[])
+        if squitter:
+            kind = 'squitter'
+            packet_stratum = Strata.SQUITTER  # or SELF_SQUITTER?
+            freqs_key = 'freqs'
+        elif performance:
+            kind = 'performance'
+            packet_stratum = Strata.PERFORMANCE
+            freqs_key = 'heard_on_freqs'
+        else:
+            return None
+        agent = packet_info.station or kind
+        from_station = packet_info.ground_station['id']
+        updates = 0
+        for gs in squitter or performance or []:
+            stn_id = gs['gs']['id']
+            sid = int(stn_id) if stn_id else None
+            if not sid or sid < 0:
+                continue
+            stratum = packet_stratum
+            if squitter and sid == from_station:
+                stratum = Strata.SELF
+            valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum.value]
+            frequencies = sorted((int(sf['freq']) for sf in gs[freqs_key] if 'freq' in sf))
+
+            added = self.add(
+                StationAvailability(
+                    valid_at=valid_at,
+                    valid_to=valid_to,
+                    station_id=sid,
+                    stratum=stratum.value,
+                    frequencies=frequencies,
+                    agent=agent,
+                    from_station=from_station,
+                )
+            )
+            if added:
+                updates += 1
+                # squitted = STATIONS[sid]
+                # squitted.update_active(frequencies)
+                # logger.debug(f'{kind} update for #{squitted.station_id}:{squitted.station_name}')
+        if updates:
+            self.publish("event", (kind, agent, packet_info.timestamp))
+            self.updated(self.current())
+
+    def on_community(self, airframes: dict) -> None:
+        updates = 0
+        for gs in airframes.get('ground_stations', []):
+            try:
+                sid = gs['id']
+            except KeyError:
+                logger.warning(f'{self} ignoring spurious station `{gs}`')
+                continue
+            if not sid:
+                continue
+
+            last_updated = gs['last_updated']
+            if last_updated < 0:
+                last_updated += util.now().timestamp()
+            stratum = gs.get('stratum', Strata.CACHE.value)
+            valid_at = util.make_naive_utc(util.timestamp_to_datetime(last_updated))
+            valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum]
+            frequencies = sorted(gs['frequencies']['active'])
+            from_station = gs.get('update_source', None)
+
+            added = self.add(StationAvailability(
+                valid_at=valid_at,
+                valid_to=valid_to,
+                station_id=sid,
+                stratum=stratum,
+                frequencies=frequencies,
+                agent='community',
+                from_station=None if isinstance(from_station, str) else from_station,
+            ))
+            if added:
+                updates += 1
+                # try:
+                #     squitted = STATIONS[sid]
+                # except AttributeError:
+                #     pass  # loading, cannot output or update
+                # else:
+                #     if (
+                #         util.now() <= valid_to.astimezone(datetime.timezone.utc)
+                #         or (not squitted.active_frequencies and stratum > Strata.CACHE.value)
+                #     ):
+                #         squitted.update_active(frequencies)
+                #     logger.debug(f'community update for #{squitted.station_id}:{squitted.station_name}')
+                # logger.debug(f'adding availability for {sid} {stratum} {valid_at}')
+        if updates:
+            self.updated(self.current())
+
+    def on_systable(self, station_table: str) -> None:
+        data = util.deserialise_station_table(station_table)
+
+        stratum = Strata.SYSTABLE.value
+        valid_at = util.make_naive_utc(util.now())
+        valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum]
+        hfdl_stations: dict[int, Station] = {}
+        for gs in data['stations']:
+            sid = gs.get('id', None)
+            if not sid or sid < 0:
+                continue
+            frequencies = sorted(int(f) for f in gs['frequencies'])
+
+            added = self.add(StationAvailability(
+                valid_at=valid_at,
+                valid_to=valid_to,
+                station_id=sid,
+                stratum=stratum,
+                frequencies=[],
+                agent='systable',
+                from_station=None,
+            ))
+            if added:
+                hfdl_stations[sid] = Station(
+                    station_id=sid,
+                    station_name=gs['name'],
+                    latitude=gs['lat'],
+                    longitude=gs['lon'],
+                    assigned_frequencies=frequencies,
+                    active_frequencies=[]
+                )
+        if hfdl_stations:
+            STATIONS.update(hfdl_stations)
+            self.updated()
+
+
+class CumulativePacketStats(bus.Publisher):
+    packets: int = 0
+    from_air: int = 0
+    from_ground: int = 0
+    with_position: int = 0
+    no_position: int = 0
+    squitters: int = 0
+
+    def on_hfdl(self, packet: hfdl.HFDLPacketInfo) -> None:
+        self.packets += 1
+        if packet.is_downlink:
+            self.from_air += 1
+        if packet.is_uplink:
+            self.from_ground += 1
+        if packet.is_squitter:
+            self.squitters += 1
+        if packet.position:
+            self.with_position += 1
+        else:
+            self.no_position += 1
+        self.publish('update', self)
+
+
+class StationLookup:
+    by_id: dict[int, Station]
+    by_freq: dict[int, Station]
+
+    def __init__(self, initial: Optional[dict[int, Station]] = None) -> None:
+        if initial:
+            self.update(initial)
+
+    def update(self, systable: dict[int, Station]) -> None:
+        if hasattr(self, 'by_id'):
+            for sid, station in systable.items():
+                current = self.by_id.setdefault(sid, station)
+                current.update(station)
+        else:
+            self.by_id = systable
+        self.refresh()
+
+    def update_active(self, availabilities: Sequence[StationAvailability]) -> None:
+        if hasattr(self, 'by_id'):
+            for availability in availabilities:
+                self[availability.station_id].update_active(availability.frequencies)
+            self.refresh()
+
+    def refresh(self) -> None:
+        self.by_freq = {}
+        for station in self.by_id.values():
+            for freq in station.active_frequencies:
+                self.by_freq[freq] = station
+            for freq in station.assigned_frequencies:
+                self.by_freq.setdefault(freq, station)
+
+    def __getitem__(self, key: Union[str, int, float]) -> Station:
+        return self.get(key)
+
+    def get(self, key: Union[str, int, float], default: Optional[Station] = None) -> Station:
+        try:
+            k = int(key)
+            if k < 2000:
+                return self.by_id[k]
+            return self.by_freq[k]
+        except KeyError:
+            # return default
+            raise
+        except AttributeError as err:
+            # return default
+            logger.error(f'ID   {self.by_id}')
+            logger.error(f'FREQ {self.by_freq}')
+            raise KeyError(f'Mapping error for {key}; no mappings yet?') from err
+
+    def assigned(self) -> dict[int, list[int]]:
+        result = {}
+        for station in self.by_id.values():
+            result[station.station_id] = station.assigned_frequencies
+        return result
+
+    def active(self) -> dict[int, list[int]]:
+        result = {}
+        for station in self.by_id.values():
+            result[station.station_id] = station.active_frequencies
+        return result
+
+    def is_active(self, frequency: int) -> bool:
+        return self[frequency].is_active(frequency)
+
+
+STATIONS = StationLookup()
+UPDATER = AbstractNetworkUpdater()  # Must be overridden on initialization of the main task
+

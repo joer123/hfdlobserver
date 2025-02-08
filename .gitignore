@@ -8,6 +8,7 @@ settings.yaml.new
 settings.yaml.safe
 *.state
 
+venv
 kiwiclient
 libacars
 statsd-c-client

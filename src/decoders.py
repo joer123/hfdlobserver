@@ -1,5 +1,5 @@
 # decoders.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -28,7 +28,7 @@ class IQDecoderCommand(hfdl_observer.process.Command):
 
 class BaseDecoder:
     listener: hfdl_observer.data.ListenerConfig
-    allocation: hfdl_observer.data.Allocation
+    channel: hfdl_observer.data.ObservingChannel
     config: collections.abc.Mapping
     task: Optional[asyncio.Task] = None
 
@@ -48,7 +48,7 @@ class BaseDecoder:
     def stop(self) -> Optional[asyncio.Task]:
         raise NotImplementedError()
 
-    def listen(self, allocation: hfdl_observer.data.Allocation) -> asyncio.Task:
+    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         raise NotImplementedError()
 
     def __str__(self) -> str:
@@ -57,16 +57,16 @@ class BaseDecoder:
 
 class IQDecoder(BaseDecoder):
     def commandline(self) -> list[str]:
-        if not self.allocation or not self.allocation.frequencies:
+        if not self.channel or not self.channel.frequencies:
             logger.warning(f'{self} requested an empty command line')
             return []
         cmd = [
             str(settings.as_executable_path(self.config['decoder_path'])),
             '--iq-file', '-',
-            '--sample-rate', str(self.allocation.allowed_width * 1000),
+            '--sample-rate', str(self.channel.allowed_width * 1000),
             '--sample-format', 'CS16',
             '--read-buffer-size', '9600',
-            '--centerfreq', str(self.allocation.center),
+            '--centerfreq', str(self.channel.center),
         ]
         # map some common options
         normalizer: Callable[[Any], Any]
@@ -116,7 +116,7 @@ class IQDecoder(BaseDecoder):
             cmd.extend(['--output', f'decoded:json:file:path={packetlog},rotate=daily',])
 
         # now add all the frequencies we're watching
-        cmd.extend(str(f) for f in self.allocation.frequencies)
+        cmd.extend(str(f) for f in self.channel.frequencies)
         return cmd
 
 
@@ -140,8 +140,8 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
         os.close(self.iq_fd)
         pass
 
-    def listen(self, allocation: hfdl_observer.data.Allocation) -> asyncio.Task:
-        self.allocation = allocation
+    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+        self.channel = channel
         return self.start()
 
     def create_command(self) -> IQDecoderCommand:
@@ -159,8 +159,8 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
 
 class DummyDecoder(IQDecoderProcess):
-    def listen(self, allocation: hfdl_observer.data.Allocation) -> asyncio.Task:
-        self.allocation = allocation
+    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+        self.channel = channel
         logger.debug(f'{self} command {self.commandline()}')
-        logger.debug(f'{self} listening on {allocation}')
+        logger.debug(f'{self} listening on {channel}')
         return asyncio.get_running_loop().create_task(asyncio.sleep(0.1))

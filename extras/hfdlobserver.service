@@ -1,0 +1,22 @@
+# hfdlobserver service for systemd
+
+[Unit]
+Description=A multi-headed dumphfdl receiver
+Documentation=https://hfdl.observer/app
+Wants=network.target
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/default/hfdlobserver
+User=$USER
+WorkingDirectory=$SCRIPT_DIR/hfdlobserver
+ExecStart=$SCRIPT_DIR/hfdlobserver.sh --headless $CONFIG_OPTIONS $LOG_OPTIONS $DEBUG_OPTIONS
+Type=simple
+Restart=always
+RestartSec=15
+StartLimitInterval=1
+StartLimitBurst=100
+Nice=-1
+
+[Install]
+WantedBy=default.target

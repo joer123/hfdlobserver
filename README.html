@@ -1,7 +1,7 @@
 <html>
 
 <head>
-    <title>hfdl.observer/888</title>
+    <title>HFDL Observer</title>
     <link rel="stylesheet" type="text/css" href="hfdl.css">
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -17,7 +17,7 @@
         <h1>hfdl.observer</h1>
         <div class="hfdl">high frequency data link</div>
     </div>
-    <h1>HFDL.observer/888</h1>
+    <h1>HFDL Observer</h1>
     <p>A multi-headed dumphfdl receiver for use with Web-888 devices.</p>
     <h2>Background</h2>
     <p>The dynamism of the High Frequency Data Link infrastructure poses some problems for those trying to efficiently
@@ -38,7 +38,7 @@
         offers 13 simultaneous streams/channels to process. Each channel is fairly narrow (12kHz) but that is enough to
         cover up to 4 HFDL frequencies (if they are close enough together).</p>
     <h2>Features</h2>
-    <p>HFDL.observer/888 makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or
+    <p>HFDL Observer makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or
         other consumers) easy.</p>
     <p>It assigns frequencies to each of 13 virtual "receivers". The assignments are based on a list of currently active
         frequencies ranked by a user-configured station preference (generally stations nearer your Web-888 should have
@@ -51,18 +51,18 @@
     <p>Optionally, it can also retrieve updated frequency lists from community source (such as hfdl.observer or
         airframes.io). This covers periods where squitters (frequency updates) may not be received by your station for a
         time.</p>
-    <p>In general, there are around 30 frequencies active globally at a given time. HFDL.observer/888 allows your
+    <p>In general, there are around 30 frequencies active globally at a given time. HFDL Observer allows your
         station to monitor (typically) 18-23 of them.</p>
     <p>Processing the entire HF frequency space would be very CPU-intensive. Taking advantage of the FPGA in Web-888 to
         select only the portions we're interested in means:</p>
     <ul>
-        <li>The data rate from the Web-888 to the device running HFDL.observer/888 is around 5Mbps.</li>
+        <li>The data rate from the Web-888 to the device running HFDL Observer is around 5Mbps.</li>
         <li>The aggregate bandwidth that needs to be scanned by all virtual receivers is around 156kHz.</li>
         <li>The CPU required for the virtual receivers is about ½ of 1 core of an Odroid M1S or Raspberry Pi4 (~13%
             total CPU)</li>
     </ul>
     <h2>CUI</h2>
-    <p>HFDL.observer/888 also adds a simple but rich console-based display. At the top is a heat map like grid depicting
+    <p>HFDL Observer also adds a simple but rich console-based display. At the top is a heat map like grid depicting
         the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log
         output. As it is console based, it can run within a <code>screen</code> session over <code>ssh</code> from a
         remote computer.</p>
@@ -127,7 +127,7 @@ $ ./install.sh
         </li>
         <li>Run <code>./configure.py</code> to walk through some simple configuration questions.</li>
     </ol>
-    <p>While several helper programs are installed, they are invoked via the operating system, HFDL.observer/888 makes
+    <p>While several helper programs are installed, they are invoked via the operating system, HFDL Observer makes
         no alteration to any of their code or operations, and connects only through standard mechanisms (file handles
         and sockets).</p>
     <h2>Configuration</h2>
@@ -180,7 +180,7 @@ $ extras/install-service.sh
         minor ability to configure it via <code>/etc/default/hfdlobserver888</code>, but most items are managed through
         the <code>settings.yaml</code> file.</p>
     <h2>Implementation Notes</h2>
-    <p>The internal structure of HFDL.observer/888 is more complicated than it strictly needs to be. Much of this is
+    <p>The internal structure of HFDL Observer is more complicated than it strictly needs to be. Much of this is
         derived from the desire to be fairly decoupled internall for future reuse. This project started as a less well
         defined desire to orchestrate a variety of different SDRs in sample HFDL frequencies, and it may be expanded to
         deal with less homogenous virtual receivers in the future. It should also abstract well to handling remote

@@ -8,15 +8,32 @@ fi
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 export NEWT_COLORS='root=,black'
-sudo apt install -y whiptail python3 python3-venv git
+sudo apt install -y whiptail python3 python3-venv git sqlite3
 
 # create virtualenvironment
+if [[ -r "${SCRIPT_DIR}/venv/bin/activate" ]] ; then
+    VENV="${SCRIPT_DIR}/venv"
+elif [[ -r "${HOME}/.virtualenvs/hfdlobserver888/bin/activate" ]] ; then
+    VENV="${HOME}/.virtualenvs/hfdlobserver888"
+else
+    VENV="${HOME}/.virtualenvs/hfdlobserver"
+fi
+
 cd $HOME
-VENV="$HOME/.virtualenvs/hfdlobserver888"
 [[ -d .virtualenvs ]] || mkdir .virtualenvs
+if [[ -d "${VENV}" ]] ;  then
+    if [[ ! -r "${VENV}/bin/activate" ]] ; then
+        # There is a problem with the virtual env. will attempt to recreate.
+        rm -r "${VENV}"
+    fi
+fi
 [[ -d "${VENV}" ]] || python3 -m venv "${VENV}"
 if [[ $? != 0 ]] ; then
-    echo 'could not create virtual environment install failed; bailing.'
+    echo 'could not create virtual environment. install failed; bailing.'
+    exit -1
+fi
+if [[ ! -r "${VENV}/bin/activate" ]] ; then
+    echo "virtual environment does not appear to be set up correctly. Bailing."
     exit -1
 fi
 
@@ -105,17 +122,17 @@ fi
 python3 - << EOF
 import whiptail
 
-w = whiptail.Whiptail('Installation', backtitle='HFDL.observer/888: A multi-headed dumphfdl receiver for Web-888 devices')
+w = whiptail.Whiptail('Installation', backtitle='HFDL Observer: A multi-headed dumphfdl receiver')
 
 w.msgbox("""
-HFDL.observer/888 is installed and configured!
+HFDL Observer is installed and configured!
 
-run './hfdlobserver888.sh' to start. Consult './hfdlobserver888.sh --help' for some basic usage notes.
+run './hfdlobserver.sh' to start. Consult './hfdlobserver.sh --help' for some basic usage notes.
 
 the file 'settings.yaml.annotated' file contains more complete settings with comments.
 You can look at this for aid in manually configurating it for advanced use cases.
 
-To install HFDL.observer/888 as a service, run the 'extras/install-service.sh' script.
+To install HFDL Observer as a service, run the 'extras/install-service.sh' script.
 """)
 EOF
 

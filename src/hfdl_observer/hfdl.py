@@ -6,11 +6,11 @@
 
 import datetime
 import logging
-
 from typing import Any, Optional, Union
 
 
 HFDL_CHANNEL_WIDTH: float = 2.4
+HFDL_FRAME_TIME = 32
 
 
 logger = logging.getLogger()
@@ -69,6 +69,18 @@ class HFDLPacketInfo:
     cpdlc_pos = "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.pos.data.lat_lon".split('.')
     cpdlc_alt = "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.alt_pos.pos.data.lat_lon".split('.')
 
+    def get(self, path: Union[str, list[str]], data: Optional[dict] = None, default: Any = None) -> Optional[Any]:
+        data = self.packet if data is None else data
+        path = str(path).split('.') if '.' in path else (path if isinstance(path, list) else [str(path)])
+        car, *cdr = path
+        try:
+            node = data[car]
+        except (KeyError, AttributeError, IndexError):
+            return default
+        if cdr:
+            return self.get(cdr, data=node, default=default)
+        return node
+
     @property
     def position(self) -> Optional[tuple[str, str]]:
         # position could be in several places...
@@ -77,15 +89,6 @@ class HFDLPacketInfo:
         # "acars.arinc622.adsc.tags.<list>.basic_report"
         # "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.pos.data.lat_lon"
         # "acars.arinc622.cpdlc.atc_uplink_msg.atc_uplink_msg_element_id.data.alt_pos.pos.data.lat_lon"
-        def get_path(d: dict, path: list[str]) -> Optional[Any]:
-            car, *cdr = path
-            try:
-                node = d[car]
-            except (KeyError, AttributeError, IndexError):
-                return None
-            if cdr:
-                return get_path(node, cdr)
-            return node
 
         try:
             hfnpdu = self.packet.get('lpdu', {}).get('hfnpdu')
@@ -93,12 +96,12 @@ class HFDLPacketInfo:
                 pos = hfnpdu.get('pos')
                 if pos:
                     return (pos['lat'], pos['lon'])
-                for tag in get_path(hfnpdu, ['acars', 'arinc622', 'adsc', 'tags']) or []:
+                for tag in self.get(['acars', 'arinc622', 'adsc', 'tags'], hfnpdu) or []:
                     pos = tag.get('basic_report')
                     if pos:
                         return (pos['lat'], pos['lon'])
                 for p in [self.cpdlc_pos, self.cpdlc_alt]:
-                    pos = get_path(hfnpdu, p)
+                    pos = self.get(p, hfnpdu)
                     if pos:
                         return (pos['lat'], pos['lon'])
         except KeyError:
@@ -116,42 +119,9 @@ class HFDLPacketInfo:
         if station:
             gs = self.ground_station.get('name', None)
             if gs is None:
-                gs_id = self.ground_station.get('id', -1)
-                gs = STATIONS.get(gs_id).get('name', 'n/a')
+                # gs_id = self.ground_station.get('id', -1)
+                gs = self.ground_station.get('name', 'n/a')
             gs = gs.split(',', 1)[0]
         else:
             gs = 'unknown'
         return f'<HFDL/{subtype} {station}@{self.timestamp} {self.frequency}kHz ({self.snr:.1f}dB) {direction} {gs}>'
-
-
-class StationLookup:
-    by_id: dict[int, dict]
-    by_freq: dict[int, dict]
-
-    def update(self, systable: dict[int, Any]) -> None:
-        self.by_id = systable
-        self.by_freq = {}
-        for sid, station in systable.items():
-            for freq in station['frequencies']:
-                self.by_freq[freq] = station
-
-    def __getitem__(self, key: Union[str, int, float]) -> Any:
-        return self.get(key)
-
-    def get(self, key: Union[str, int, float], default: Optional[dict[int, Any]] = None) -> Any:
-        try:
-            k = int(key)
-            if k < 2000:
-                return self.by_id[k]
-            return self.by_freq[k]
-        except KeyError:
-            if default:
-                return default
-            raise
-        except AttributeError as err:
-            if default:
-                return default
-            raise KeyError(f'Mapping error for {key}') from err
-
-
-STATIONS = StationLookup()

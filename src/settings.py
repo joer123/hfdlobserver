@@ -1,5 +1,5 @@
 # settings.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -21,7 +21,7 @@ import hfdl_observer.env
 
 base_path: pathlib.Path = None  # type: ignore
 registry: dict[str, dict] = {
-    'observer888': {
+    'observer': {
         'conductor': {
             'slot_width': 12,
             # ignored_frequencies is a list of frequencies to ignore in assigning receivers.
@@ -62,6 +62,11 @@ registry: dict[str, dict] = {
     'cui': {
         'ticker': {
             'bin_size': 60,
+            'display_mode': 'frequency',
+            'show_all_active': True,
+            'show_active_line': True,
+            'show_confidence': True,
+            'show_targetting': True,
         }
     },
     "configs": {
@@ -114,7 +119,7 @@ registry: dict[str, dict] = {
                 'recorder_path': 'kiwirecorder.py',
                 'settle_time': 1,
                 'quiet': False,
-                'username': 'kiwi_nc:observer888',
+                'username': 'kiwi_nc:hfdlobserver',
                 'channel_bandwidth': 12,
                 'max_channels': 13,
                 'agc_files': {
@@ -204,6 +209,6 @@ def as_executable_path(path_str: str) -> pathlib.Path:
 
 if __name__ == '__main__':
     load('settings.yaml')
-    for rname in registry['observer888']['local_receivers']:
-        r = registry['observer888']['all_receivers'][rname]
+    for rname in registry['observer']['local_receivers']:
+        r = registry['observer']['all_receivers'][rname]
         print(json.dumps(flatten(r, 'receiver'), indent=4))

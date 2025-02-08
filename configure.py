@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # configure.py
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -33,11 +33,11 @@ for station in active['ground_stations']:
 
 settings = yaml.safe_load(pathlib.Path('settings.yaml.base').read_text())
 
-w = Whiptail('Configure HFDL.observer/888', backtitle='A multi-headed dumphfdl receiver for Web-888 devices')
+w = Whiptail('Configure HFDL Observer', backtitle='A multi-headed dumphfdl receiver')
 
-w.msgbox("""Welcome to HFDL.observer/888. Let's set up a simple configuration.
+w.msgbox("""Welcome to HFDL Observer. Let's set up a simple configuration.
 
-Web-888 can provide 13 streams of IQ data. HFDL.observer/888 takes advantage of these to listen to as many useful HFDL frequencies as possible at any given time. In order to pick the right frequencies, you need to configure a prioritized list of station IDs.
+Web-888 can provide 13 streams of IQ data. HFDL Observer takes advantage of these to listen to as many useful HFDL frequencies as possible at any given time. In order to pick the right frequencies, you need to configure a prioritized list of station IDs.
 
 You can either specify the list of IDs directly, or the installer can make a good(?) guess depending on the latitude and longitude of your Web-888 device.
 """)
@@ -90,14 +90,14 @@ else:
     import extras.guess_station_ranking as gss
     station_list = list(d[1] for d in gss.guess(lat, long))
 
-default_path(settings, 'observer888', 'conductor')['ranked_stations'] = station_list
+default_path(settings, 'observer', 'conductor')['ranked_stations'] = station_list
 
 entered, code = w.inputbox("[Optional] If you want to log packets locally, input a writeable directory here.")
 if code == 1:
     sys.exit()
 if entered:
     entered = entered.rstrip('/')
-    all_receivers = default_path(settings, 'observer888', 'all_receivers')
+    all_receivers = default_path(settings, 'observer', 'all_receivers')
     for rname in all_receivers:
         default_path(all_receivers, rname, 'decoder')['packetlog'] = f'{entered}/{rname}_packet.log'
 
@@ -113,7 +113,7 @@ code = w.yesno("""
 """)
 
 if code:
-    default_path(settings, 'observer888', 'tracker')['station_updates'] = [{
+    default_path(settings, 'observer', 'tracker')['station_updates'] = [{
         'url': 'https://hfdl.observer/active.json',
         'period': 61
     }]
@@ -141,7 +141,7 @@ if out.exists():
     out = pathlib.Path('settings.yaml.new')
     extra = '\n\nYou should merge this with your existing settings.yaml file before running.'
 else:
-    extra = '\n\nYour HFDL.observer/888 installation is configured for running via `hfdlobserver888.sh`'
+    extra = '\n\nYour HFDL Observer installation is configured for running via `hfdlobserver.sh`'
 
 out.write_text(yaml.safe_dump(settings, default_flow_style=False))
 
