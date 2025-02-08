@@ -33,7 +33,7 @@ import settings
 
 logger = logging.getLogger(__name__)
 start = datetime.datetime.now()
-SCREEN_REFRESH_RATE = 2
+SCREEN_REFRESH_RATE = 1
 MAP_REFRESH_PERIOD = 32.0 / 19.0  # every HFDL slot
 
 
@@ -262,12 +262,12 @@ class AbstractHeatMapFormatter:
 
     def column_headers(self, root_str: str) -> Sequence[Union[None, rich.text.Text]]:
         columns: list[Union[None, rich.text.Text]] = [
-            rich.text.Text(f" 📊 per {root_str: <7}"),
-            rich.text.Text('NOW', justify='center')
+            rich.text.Text(f" 📊 per {root_str}            "[:19]),
+            rich.text.Text('NOW')
         ]
         for i in range(1, len(self.source.column_headers)):
             title = self.strokes[i % 10] or ' '  # ] '┇    ¦    '[i % 10]
-            columns.append(rich.text.Text(f'{title: ^3}', justify='center'))
+            columns.append(rich.text.Text(f' {title} '))
         columns.append(None)
         return columns
 
@@ -285,8 +285,8 @@ class AbstractHeatMapFormatter:
             style = self.style(cell.value)
             text = self.symbol(cell.value)
         else:
-            text = stroke or '·'
-        return rich.text.Text(text, style=style, justify='center')
+            text = f' {stroke or "·"} '
+        return rich.text.Text(text, style=style)
 
     def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[rich.text.Text]:
         row_header = self.source.row_headers[row_id]
@@ -375,15 +375,15 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
         stroke = self.strokes[index % 10]
         if cell.value:
             style = self.style(cell.value)
-            text = self.symbol(cell.value)
+            text = ' ' + self.symbol(cell.value) + ' '
         elif 'active' in cell.tags and self.show_active_line:
             if 'targetted' in row_header.tags:
                 text = f'─{stroke or "─"}─'
             else:
                 text = f'⠒{stroke or "⠒"}⠒'  # ┄┄┄' # ╴╴╴'  # ┈┈┈
         else:
-            text = stroke or '·'
-        return rich.text.Text(text, style=style, justify='center')
+            text = f' {stroke or "·"} '
+        return rich.text.Text(text, style=style)  # , justify='center')
 
 
 class HeatMapByBandFormatter(AbstractHeatMapFormatter):
@@ -543,12 +543,20 @@ class HeatMap:
             table = rich.table.Table.grid()
 
             columns = source.column_headers(bin_str)
-            table.add_row(*columns, style=PANE_BAR)
+            header_text = rich.text.Text()
+            # doing it this way is much much faster than separate columns since we already know the layout and it
+            # does not have to be calculated. Rich is great, but also slow.
+            for cell in columns:
+                header_text.append(cell or '   ')
+            table.add_row(header_text, style=PANE_BAR)
 
             for key, row in source.rows():
                 cells = source.row(key, row)
                 if cells:
-                    table.add_row(*cells, style="white on black")
+                    row_text = rich.text.Text()
+                    for cell in cells:
+                        row_text.append(cell or '   ')
+                    table.add_row(row_text, style="white on black")
         else:
             table = rich.table.Table.grid(expand=True)
             table.add_row(f" 📊 per {bin_str}", style=PANE_BAR)

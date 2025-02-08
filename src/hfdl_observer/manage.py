@@ -229,7 +229,7 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
         untargetted_frequencies = []
         chosen_frequencies = []
         for channel in chosen_channels:
-            logger.info(f'considering {channel}')
+            logger.debug(f'considering {channel}')
             for frequency in channel.frequencies:
                 station = hfdl_observer.network.STATIONS[frequency]
                 # this calculation is a bit premature, but should be okay. Could also be done for keeps and starts
@@ -245,7 +245,7 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                     keeps[receiver.name] = channel
                     break
             else:
-                logger.info(f'adding {channel} to starts')
+                logger.debug(f'adding {channel} to starts')
                 starts.append(channel)
 
         available = []
@@ -254,7 +254,7 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                 channel = keeps[receiver.name]
                 logger.debug(f'keeping {receiver}')
             else:
-                logger.info(f'marking {receiver} available')
+                logger.debug(f'marking {receiver} available')
                 available.append(receiver)
 
         for channel, receiver in zip(starts, available, strict=False):
@@ -308,12 +308,12 @@ class Reaper(hfdl_observer.bus.Publisher):
         self.last_seen[frequency] = max(packet.timestamp, self.last_seen.get(frequency, 0))
 
     def add_channel(self, channel: hfdl_observer.data.ObservingChannel) -> None:
-        logger.info(f'reaper adding channel {channel}')
+        logger.debug(f'reaper adding channel {channel}')
         for freq in channel.frequencies:
             self.channels[freq] = channel
 
     def remove_channel(self, channel: hfdl_observer.data.ObservingChannel) -> None:
-        logger.info(f'reaper removing channel {channel}')
+        logger.debug(f'reaper removing channel {channel}')
         for freq in channel.frequencies:
             if freq in self.channels:
                 del self.channels[freq]

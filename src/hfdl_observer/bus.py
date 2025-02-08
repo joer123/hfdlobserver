@@ -148,7 +148,7 @@ class StreamWatcher(RoutineTask, Publisher):
         self.debug_logger = debug_logger
 
     async def run(self) -> None:
-        logger.info(f'watching {self.stream}')
+        logger.debug(f'watching {self.stream}')
         async for data in self.stream:
             line = data.decode('utf8').rstrip()
             if self.debug_logger:

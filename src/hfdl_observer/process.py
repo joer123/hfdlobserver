@@ -119,7 +119,7 @@ class Command:
                         self.running_condition.notify_all()
 
                     try:
-                        self.process_logger.info('starting error watcher')
+                        self.process_logger.debug('starting error watcher')
                         asyncio.get_running_loop().create_task(self.watch_stderr(self.process.pid, self.process.stderr))
                         retcode = await self.process.wait()
                         if retcode not in self.valid_return_codes and not (self.terminated or self.killed):
