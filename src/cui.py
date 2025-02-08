@@ -33,7 +33,7 @@ import settings
 
 logger = logging.getLogger(__name__)
 start = datetime.datetime.now()
-SCREEN_REFRESH_RATE = 1
+SCREEN_REFRESH_RATE = 2
 MAP_REFRESH_PERIOD = 32.0 / 19.0  # every HFDL slot
 
 
