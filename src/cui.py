@@ -219,6 +219,9 @@ NORMAL_TEXT = rich.style.Style.parse('white on black')
 PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
 
 
+CellText = tuple[str | None, str | rich.style.Style | None]
+
+
 class AbstractHeatMapFormatter:
     source: heat.Table
     strokes: dict[int, Optional[str]] = collections.defaultdict(lambda: None)
@@ -257,28 +260,28 @@ class AbstractHeatMapFormatter:
         return rich.style.Style(bgcolor=f'rgb({",".join(str(i) for i in rgb)})', color='black')
         # return rich.style.Style.parse(f'bright_black on rgb({",".join(str(i) for i in rgb)})')
 
-    def cumulative(self, row: Sequence[heat.Cell]) -> rich.text.Text:
-        return rich.text.Text(f'{sum(cell.value for cell in row): >4}')
+    def cumulative(self, row: Sequence[heat.Cell]) -> CellText:
+        return (f'{sum(cell.value for cell in row): >4}', None)
 
-    def column_headers(self, root_str: str) -> Sequence[Union[None, rich.text.Text]]:
-        columns: list[Union[None, rich.text.Text]] = [
-            rich.text.Text(f" 📊 per {root_str}            "[:19]),
-            rich.text.Text('NOW')
+    def column_headers(self, root_str: str) -> list[CellText]:
+        columns: list[CellText] = [
+            (f" 📊 per {root_str}           "[:18], None),
+            ('NOW', None)
         ]
         for i in range(1, len(self.source.column_headers)):
             title = self.strokes[i % 10] or ' '  # ] '┇    ¦    '[i % 10]
-            columns.append(rich.text.Text(f' {title} '))
-        columns.append(None)
+            columns.append((f' {title} ', None))
+        columns.append((None, None))
         return columns
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
-    ) -> rich.text.Text:
+    ) -> CellText:
         raise NotImplementedError()
 
     def cell(
         self, index: int, cell: heat.Cell, row_header: heat.RowHeader
-    ) -> rich.text.Text:
+    ) -> CellText:
         style: Union[rich.style.Style, str] = 'bright_black on black'
         stroke = self.strokes[index % 10]
         if cell.value:
@@ -286,9 +289,9 @@ class AbstractHeatMapFormatter:
             text = self.symbol(cell.value)
         else:
             text = f' {stroke or "·"} '
-        return rich.text.Text(text, style=style)
+        return (text, style)
 
-    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[rich.text.Text]:
+    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[CellText]:
         row_header = self.source.row_headers[row_id]
         cells = [self.row_header(row_header, row_data)]
         cells.extend(self.cell(ix, cell, row_header) for ix, cell in enumerate(row_data))
@@ -334,7 +337,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
-    ) -> rich.text.Text:
+    ) -> CellText:
         infix = ''
         style = NORMAL_TEXT
         if header.station_id:
@@ -361,16 +364,16 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
                 stratum = '◐'  # ◒⊙⬓
             elif 'guess' in header.tags:
                 stratum = '○'
-        return rich.text.Text(f'{symbol}{infix: >9}{header.label: >6} {stratum} ', style=style)
+        return (f'{symbol}{infix: >9}{header.label: >6} {stratum} ', style)
 
-    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[rich.text.Text]:
+    def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[CellText]:
         if self.show_quiet or any(cell.value for cell in row_data):
             return super().row(row_id, row_data)
         return []
 
     def cell(
         self, index: int, cell: heat.Cell, row_header: heat.RowHeader
-    ) -> rich.text.Text:
+    ) -> CellText:
         style: Union[rich.style.Style, str] = 'bright_black on black'
         stroke = self.strokes[index % 10]
         if cell.value:
@@ -383,7 +386,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
                 text = f'⠒{stroke or "⠒"}⠒'  # ┄┄┄' # ╴╴╴'  # ┈┈┈
         else:
             text = f' {stroke or "·"} '
-        return rich.text.Text(text, style=style)  # , justify='center')
+        return (text, style)  # , justify='center')
 
 
 class HeatMapByBandFormatter(AbstractHeatMapFormatter):
@@ -410,12 +413,12 @@ class HeatMapByBandFormatter(AbstractHeatMapFormatter):
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
-    ) -> rich.text.Text:
+    ) -> CellText:
         if any(cell.value for cell in row):
             style = PROMINENT_TEXT
         else:
             style = NORMAL_TEXT
-        return rich.text.Text(f' {header.label: >13} MHz ', style=style)
+        return (f' {header.label: >13} MHz ', style)
 
 
 class HeatMapByStationFormatter(AbstractHeatMapFormatter):
@@ -432,12 +435,12 @@ class HeatMapByStationFormatter(AbstractHeatMapFormatter):
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
-    ) -> rich.text.Text:
+    ) -> CellText:
         if any(cell.value for cell in row):
             style = PROMINENT_TEXT
         else:
             style = NORMAL_TEXT
-        return rich.text.Text(f' {header.label.split(",", 1)[0].strip(): >17} ', style=style)
+        return (f' {header.label.split(",", 1)[0].strip(): >17} ', style)
 
 
 class HeatMapByAgentFormatter(AbstractHeatMapFormatter):
@@ -454,12 +457,12 @@ class HeatMapByAgentFormatter(AbstractHeatMapFormatter):
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
-    ) -> rich.text.Text:
+    ) -> CellText:
         if any(cell.value for cell in row):
             style = PROMINENT_TEXT
         else:
             style = NORMAL_TEXT
-        return rich.text.Text(f' {header.label: >17} ', style=style)
+        return (f' {header.label: >17} ', style)
 
 
 class HeatMap:
@@ -530,8 +533,26 @@ class HeatMap:
         if now - self.last_render_time > MAP_REFRESH_PERIOD:
             self.render()
 
+    def celltexts_to_text(self, texts: list[CellText], style: Optional[rich.style.Style] = None) -> rich.text.Text:
+        elements: list[tuple[str, str | rich.style.Style | None]] = []
+        for celltext in texts:
+            text, textstyle = (celltext[0] if celltext[0] else '   ', celltext[1])
+            if elements and elements[-1][1] == textstyle:   # if the styles are the same, they can be merged.
+                elements[-1] = (elements[-1][0] + text, textstyle)
+            else:
+                elements.append((text, textstyle))
+        result = rich.text.Text(style=style) if style else rich.text.Text()
+        for element in elements:
+            result.append(*element)
+        return result
+
     def render(self) -> None:
-        # width = self.display.current_width - (3 + 9 + 6 + 4 + 1) - 3
+        # Hypothetically, we could represent each bin/ on each row as a "cell" Rich's table display. This would be
+        # slightly less complex on code in this module. Rich is a good framework, but it is generic and does a lot of
+        # extra work to figure out the layout when it's already statically known. Instead, this code (and its helpers)
+        # combines fragments into the smallest number of Text segments possible, and represents each row on the table
+        # with a single Text. Not ideal, but the concept of Cells is retained as it its flexibility
+        #
         width = self.display.current_width - (3 + 9 + 6 + 4 + 1)
         possible_bins = width // 3
         if self.bin_size > 60:
@@ -543,19 +564,13 @@ class HeatMap:
             table = rich.table.Table.grid()
 
             columns = source.column_headers(bin_str)
-            header_text = rich.text.Text()
-            # doing it this way is much much faster than separate columns since we already know the layout and it
-            # does not have to be calculated. Rich is great, but also slow.
-            for cell in columns:
-                header_text.append(cell or '   ')
+            header_text = self.celltexts_to_text(columns)
             table.add_row(header_text, style=PANE_BAR)
 
             for key, row in source.rows():
                 cells = source.row(key, row)
                 if cells:
-                    row_text = rich.text.Text()
-                    for cell in cells:
-                        row_text.append(cell or '   ')
+                    row_text = self.celltexts_to_text(cells, None)
                     table.add_row(row_text, style="white on black")
         else:
             table = rich.table.Table.grid(expand=True)
