@@ -9,9 +9,10 @@ if [[ "${1}" == '--help' ]] ; then
 fi
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd "${SCRIPT_DIR}"
-if [[ -r "${SCRIPT_DIR}/venv/bin/activate" ]] ; then
-    VENV="${SCRIPT_DIR}/venv"
+HFDL_PATH=$(realpath "${SCRIPT_DIR}/..")
+cd "${HFDL_PATH}/"
+if [[ -r "${HFDL_PATH}/venv/bin/activate" ]] ; then
+    VENV="${HFDL_PATH}/venv"
 elif [[ -r "${HOME}/.virtualenvs/hfdlobserver888/bin/activate" ]] ; then
     VENV="${HOME}/.virtualenvs/hfdlobserver888"
 else
