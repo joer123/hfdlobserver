@@ -219,6 +219,8 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
         self,
         channels: list[hfdl_observer.data.ObservingChannel]
     ) -> list[hfdl_observer.data.ObservingChannel]:
+        if not self.proxies:
+            return []
         keeps = {}
         starts = []
         possible_frequencies = list(itertools.chain(*[c.frequencies for c in channels]))
