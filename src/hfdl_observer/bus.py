@@ -94,7 +94,7 @@ class PeriodicCallback(PeriodicTask):
         self.chatty = chatty
         self.callbacks = callbacks or []
 
-    async def execute(self):
+    async def execute(self) -> None:
         for callback in self.callbacks:
             if callable(callback):
                 callback()

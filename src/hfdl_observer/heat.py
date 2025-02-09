@@ -129,7 +129,7 @@ class TableByFrequency(Table):
         for ix, column in enumerate(self.column_headers):
             when = column.when
             column_active: dict[int, network.StationAvailability] = {}
-            for a in network.UPDATER.active(when):
+            for a in network.UPDATER.active_for_frame(when):
                 for f in a.frequencies:
                     column_active[f] = a
             for freq, cells in self.data.items():

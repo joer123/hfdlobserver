@@ -6,6 +6,7 @@
 
 import dataclasses
 import datetime
+import functools
 import logging
 
 from enum import Enum
@@ -122,6 +123,15 @@ class AbstractNetworkUpdater(bus.Publisher):
 
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         raise NotImplementedError()
+
+    @functools.lru_cache(maxsize=256)
+    def _active_ts(self, timestamp: int) -> Sequence[StationAvailability]:
+        return self.active(util.make_naive_utc(util.timestamp_to_datetime(timestamp)))
+
+    def active_for_frame(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
+        # each ground station has its own frame period. We construct a similar one for this app, but it's not official.
+        pseudoframe_ts = int(util.datetime_to_timestamp(at or util.now()) // HFDL_FRAME_TIME) * HFDL_FRAME_TIME
+        return self._active_ts(pseudoframe_ts)
 
     def add(self, availability: StationAvailability) -> bool:
         raise NotImplementedError()
