@@ -65,7 +65,9 @@ class RoutineTask(Publisher):
 
 
 class PeriodicTask():
-    def __init__(self, period: int):
+    chatty: bool = True
+
+    def __init__(self, period: float):
         super().__init__()
         self.period = period
         self.enabled = False
@@ -80,9 +82,22 @@ class PeriodicTask():
         self.enabled = True
         self.prepare()
         while self.enabled:
-            logger.info(f'{self} executing')
+            if self.chatty:
+                logger.info(f'{self} executing')
             await self.execute()
             await asyncio.sleep(self.period)
+
+
+class PeriodicCallback(PeriodicTask):
+    def __init__(self, period: float, callbacks: list[Callable], chatty: bool = True) -> None:
+        super().__init__(period)
+        self.chatty = chatty
+        self.callbacks = callbacks or []
+
+    async def execute(self):
+        for callback in self.callbacks:
+            if callable(callback):
+                callback()
 
 
 class RemoteURLRefresher(PeriodicTask, Publisher):

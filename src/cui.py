@@ -92,7 +92,6 @@ class ObserverDisplay:
 
         table.add_row(text, self.forecast or '', right, style='on dark_green')
         self.status = table
-        # self.update()
 
     def update_tty_bar(self) -> None:
         table = rich.table.Table.grid(expand=True)
@@ -139,7 +138,6 @@ class ObserverDisplay:
     def update_counts(self, table: rich.table.Table) -> None:
         if table.row_count:
             self.counts = table
-        # self.update()
 
     def on_forecast(self, data: Any) -> None:
         try:
@@ -154,8 +152,6 @@ class ObserverDisplay:
             recent = data['-1']
             current = data['0']
             forecast1d = data['1']
-            # forecast2d = data['2']
-            # forecast3d = data['3']
             text = rich.text.Text()
             text.append(f'R{recent["R"]["Scale"]}', style=styles[recent["R"]["Text"]])
             text.append('|')
@@ -386,7 +382,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
                 text = f'⠒{stroke or "⠒"}⠒'  # ┄┄┄' # ╴╴╴'  # ┈┈┈
         else:
             text = f' {stroke or "·"} '
-        return (text, style)  # , justify='center')
+        return (text, style)
 
 
 class HeatMapByBandFormatter(AbstractHeatMapFormatter):
@@ -494,7 +490,7 @@ class HeatMap:
             num_bins,
             self.targetted_frequencies,
             self.untargetted_frequencies,
-            util.tobool(self.config.get('show_all_active', True)),
+            util.tobool(self.config.get('show_all_active', False)),
             util.tobool(self.config.get('show_active_line', True)),
             util.tobool(self.config.get('show_confidence', True)),
             util.tobool(self.config.get('show_targetting', True)),
@@ -660,6 +656,11 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         handlers=handlers,
         force=True
     )
+    display_updater = bus.PeriodicCallback(
+        1.0 / SCREEN_REFRESH_RATE,
+        [display.update_status, display.update],
+        False
+    )
 
     def observing(
         observer: hfdlobserver.HFDLObserver,
@@ -669,14 +670,15 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         ticker.register(observer)  # , packet_counter)
         cumulative_line.register(observer, cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
+        asyncio.get_event_loop().create_task(display_updater.run())
 
     with RichLive(
         display.root, refresh_per_second=SCREEN_REFRESH_RATE, console=console, transient=True, screen=True,
         redirect_stderr=False, redirect_stdout=False, vertical_overflow="crop",
     ) as live:
         live.on_refresh = [  # type: ignore[attr-defined]
-            display.update_status,
-            display.update,
+            # display.update_status,
+            # display.update,
         ]
         hfdlobserver.observe(on_observer=observing)
 
