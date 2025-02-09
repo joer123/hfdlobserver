@@ -4,6 +4,7 @@
 # TL;DR: BSD 3-clause
 #
 
+import asyncio
 import collections
 import datetime
 import itertools
@@ -13,6 +14,7 @@ from typing import Mapping, Optional, Sequence
 
 import pony.orm as pony
 
+import hfdl_observer.bus as bus
 import hfdl_observer.hfdl as hfdl
 import hfdl_observer.network as network
 import hfdl_observer.data as data
@@ -177,6 +179,8 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
 
 
 class PacketWatcher(data.AbstractPacketWatcher):
+    periodic_task: Optional[asyncio.Task] = None
+
     @pony.db_session
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         position = packet_info.position or (None, None)
@@ -196,9 +200,17 @@ class PacketWatcher(data.AbstractPacketWatcher):
         q = pony.select(r for r in ReceivedPacket).where(lambda r: r.when > when)
         return q[:]
 
+    def prune(self) -> None:
+        ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
+
+    def prune_every(self, period: int) -> None:
+        if self.periodic_task:
+            self.periodic_task.cancel()
+        periodic_callback = bus.PeriodicCallback(period, [self.prune], True)
+        self.periodic_task = asyncio.get_running_loop().create_task(periodic_callback.run())
+
     @pony.db_session
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
-        ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.make_naive_utc(util.now() - datetime.timedelta(seconds=total_seconds))
@@ -209,7 +221,6 @@ class PacketWatcher(data.AbstractPacketWatcher):
 
     @pony.db_session
     def packets_by_agent(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
-        ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.make_naive_utc(util.now() - datetime.timedelta(seconds=total_seconds))
@@ -220,7 +231,6 @@ class PacketWatcher(data.AbstractPacketWatcher):
 
     @pony.db_session
     def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
-        ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.make_naive_utc(util.now() - datetime.timedelta(seconds=total_seconds))
@@ -232,7 +242,6 @@ class PacketWatcher(data.AbstractPacketWatcher):
 
     @pony.db_session
     def packets_by_band(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
-        ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.make_naive_utc(util.now() - datetime.timedelta(seconds=total_seconds))

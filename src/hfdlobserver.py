@@ -130,6 +130,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
     #         logger.info(f'{line}')
 
     def start(self) -> None:
+        self.packet_watcher.prune_every(60)
         self.network_overview.start()
         self.hfdl_listener.start(self.hfdl_consumers)
         self.conductor.reaper.start()
