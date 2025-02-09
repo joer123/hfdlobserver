@@ -145,7 +145,7 @@ class Command:
             self.logger.debug('run completed')
 
     def terminate(self) -> Optional[asyncio.Task]:
-        if self.process:
+        if getattr(self, 'process', None):
             self.terminated = True
             self.process_logger.info('terminating')
             try:
@@ -157,7 +157,7 @@ class Command:
         return self.task
 
     def kill(self) -> Optional[asyncio.Task]:
-        if self.process:
+        if getattr(self, 'process', None):
             self.process_logger.warning('killing')
             self.killed = True
             try:
