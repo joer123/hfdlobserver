@@ -7,6 +7,7 @@
 import asyncio
 import collections
 import datetime
+import functools
 import itertools
 import logging
 
@@ -25,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 db = pony.Database()  # 'file::memory:?cache=shared')
 db.bind(provider='sqlite', filename=':memory:')
-PAGE_SIZE = int(db.execute("PRAGMA page_size;").fetchone()[0])
+
+
+@functools.cache
+@pony.db_session
+def pagesize() -> int:
+    return int(db.execute("PRAGMA page_size;").fetchone()[0])
 
 
 # Using `db.Entity` directly won't work, as both MyPy and Pyright won't
@@ -56,7 +62,7 @@ class StationAvailability(DbEntity):  # type: ignore
         when = util.now() - datetime.timedelta(days=1)
         pony.delete(a for a in cls if a.valid_to is not None and a.valid_to < when)
         pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
-        logger.info(f'DB size is {pages * PAGE_SIZE}')
+        logger.info(f'DB size is {pages * pagesize()}')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -81,7 +87,7 @@ class ReceivedPacket(DbEntity):  # type: ignore
             initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
             pony.delete(p for p in cls if p.when < before)
             after = int(db.execute("PRAGMA page_count;").fetchone()[0])
-            logger.info(f'DB size was {initial * PAGE_SIZE}, now {after * PAGE_SIZE}')
+            logger.info(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 
