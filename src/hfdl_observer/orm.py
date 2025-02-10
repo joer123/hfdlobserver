@@ -11,7 +11,7 @@ import functools
 import itertools
 import logging
 
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import pony.orm as pony
 
@@ -134,7 +134,6 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         return False
 
     def updated(self, availabilities: Optional[Sequence[network.StationAvailability]] = None) -> None:
-        StationAvailability.prune()
         db.commit()
         super().updated(availabilities)
 
@@ -192,6 +191,9 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
     @pony.db_session
     def station(self, station_id: int, at: Optional[datetime.datetime] = None) -> Optional[network.StationAvailability]:
         return self._for_station(station_id, at=at)
+
+    def prune(self, _: Any) -> None:
+        StationAvailability.prune()
 
 
 class PacketWatcher(data.AbstractPacketWatcher):

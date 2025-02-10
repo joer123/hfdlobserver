@@ -55,6 +55,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         hfdl_observer.data.PACKET_WATCHER = self.packet_watcher
         self.network_overview = hfdl_observer.manage.NetworkOverview(config['tracker'], self.network_updater)
         self.network_overview.subscribe('frequencies', self.on_frequencies)
+        self.network_overview.subscribe('state', self.network_updater.prune)
         # self.network_overview.subscribe('frequencies', self.ministats)
 
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
