@@ -205,12 +205,13 @@ class PacketWatcher(data.AbstractPacketWatcher):
         return q[:]
 
     def prune(self) -> None:
+        logger.info('pruning received packet cache')
         ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
 
     def prune_every(self, period: int) -> None:
         if self.periodic_task:
             self.periodic_task.cancel()
-        periodic_callback = bus.PeriodicCallback(period, [self.prune], False)
+        periodic_callback = bus.PeriodicCallback(period, [self.prune], True)
         self.periodic_task = asyncio.get_running_loop().create_task(periodic_callback.run())
 
     @pony.db_session
