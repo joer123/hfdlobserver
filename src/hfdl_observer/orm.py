@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 db = pony.Database()  # 'file::memory:?cache=shared')
 db.bind(provider='sqlite', filename=':memory:')
+PAGE_SIZE = int(db.execute("PRAGMA page_size;").fetchone()[0])
+
 
 # Using `db.Entity` directly won't work, as both MyPy and Pyright won't
 # allow inheriting a class from a variable. For Pyright this declaration
@@ -52,7 +54,9 @@ class StationAvailability(DbEntity):  # type: ignore
     @pony.db_session
     def prune(cls) -> None:
         when = util.now() - datetime.timedelta(days=1)
-        pony.delete(a for a in cls if a.valid_to < when)
+        pony.delete(a for a in cls if a.valid_to is not None and a.valid_to < when)
+        pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
+        logger.info(f'DB size is {pages * PAGE_SIZE}')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -73,11 +77,13 @@ class ReceivedPacket(DbEntity):  # type: ignore
     @classmethod
     @pony.db_session
     def prune(cls, before: datetime.datetime) -> None:
-        before = int(db.execute("PRAGMA page_count;"))
-        pony.delete(p for p in cls if p.when < before)
-        after = int(db.execute("PRAGMA page_count;"))
-        size = int(db.execute("PRAGMA page_size;"))
-        logger.info(f'DB size was {before * size}, now {after * size}')
+        try:
+            initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
+            pony.delete(p for p in cls if p.when < before)
+            after = int(db.execute("PRAGMA page_count;").fetchone()[0])
+            logger.info(f'DB size was {initial * PAGE_SIZE}, now {after * PAGE_SIZE}')
+        except Exception as err:
+            logger.error('cannot prune', exc_info=err)
 
 
 # Not currently used
@@ -205,14 +211,13 @@ class PacketWatcher(data.AbstractPacketWatcher):
         return q[:]
 
     def prune(self) -> None:
-        logger.info('pruning received packet cache')
         ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
 
     def prune_every(self, period: int) -> None:
         if self.periodic_task:
             self.periodic_task.cancel()
         periodic_callback = bus.PeriodicCallback(period, [self.prune], True)
-        self.periodic_task = asyncio.get_running_loop().create_task(periodic_callback.run())
+        self.periodic_task = asyncio.get_event_loop().create_task(periodic_callback.run())
 
     @pony.db_session
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
