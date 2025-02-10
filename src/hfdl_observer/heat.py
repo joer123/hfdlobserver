@@ -127,7 +127,7 @@ class TableByFrequency(Table):
 
     def fill_active_state(self) -> None:
         for ix, column in enumerate(self.column_headers):
-            when = column.when
+            when = column.when if column.index else None  # column 0 is "NOW", which triggers different active logic.
             column_active: dict[int, network.StationAvailability] = {}
             for a in network.UPDATER.active_for_frame(when):
                 for f in a.frequencies:

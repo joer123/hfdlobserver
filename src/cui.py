@@ -36,6 +36,14 @@ start = datetime.datetime.now()
 SCREEN_REFRESH_RATE = 2
 MAP_REFRESH_PERIOD = 32.0 / 19.0  # every HFDL slot
 
+PANE_BAR = rich.style.Style.parse('bright_white on bright_black')
+SUBDUED_TEXT = rich.style.Style.parse('grey50 on black')
+NORMAL_TEXT = rich.style.Style.parse('white on black')
+PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
+
+
+CellText = tuple[str | None, str | rich.style.Style | None]
+
 
 class ObserverDisplay:
     status: Optional[rich.table.Table] = None
@@ -43,7 +51,9 @@ class ObserverDisplay:
     counts: Optional[rich.table.Table] = None
     tty_bar: Optional[rich.table.Table] = None
     tty: Optional[rich.table.Table] = None
-    forecast: Optional[rich.table.Text] = None
+    forecast: rich.text.Text
+    uptime_text: rich.text.Text
+    totals_text: rich.text.Text
 
     def __init__(
         self,
@@ -58,6 +68,11 @@ class ObserverDisplay:
         self.root = rich.layout.Layout("HFDL Observer")
         self.heatmap.display = self
         self.cumulative_line.display = self
+        self.uptime_text = rich.text.Text("STARTING")
+        self.forecast = rich.text.Text('(space weather unavailable)')
+        self.setup_status()
+        self.totals_text = rich.text.Text('', style='white on black')
+        self.setup_totals()
         self.update_status()
         self.update_tty_bar()
         forecaster.subscribe('response', self.on_forecast)
@@ -77,7 +92,7 @@ class ObserverDisplay:
         if t.row_count:
             self.root.update(t)
 
-    def update_status(self) -> None:
+    def setup_status(self) -> None:
         table = rich.table.Table.grid(expand=True)
         table.add_column()
         table.add_column(justify="center")
@@ -85,13 +100,26 @@ class ObserverDisplay:
         text = rich.text.Text()
         text.append(' 📡 ')
         text.append('HFDL Observer', style='bold')
+        table.add_row(text, self.forecast, self.uptime_text, style='on dark_green')
+        self.status = table
 
+    def setup_totals(self) -> None:
+        table = rich.table.Table.grid(expand=True)
+        table.add_column()  # title
+        table.add_column(justify='right')   # Grand Total
+        table.add_row(
+            rich.text.Text(" Totals (since start)", style='bold bright_white'),
+            self.totals_text,
+            style='white on black'
+        )
+        self.totals = table
+
+    def update_status(self) -> None:
+        if not hasattr(self, 'uptime_text'):
+            return
         uptime = datetime.datetime.now() - start
         uptime -= datetime.timedelta(0, 0, uptime.microseconds)
-        right = rich.text.Text(f'UP {uptime}')
-
-        table.add_row(text, self.forecast or '', right, style='on dark_green')
-        self.status = table
+        self.uptime_text.plain = f'UP {uptime}'
 
     def update_tty_bar(self) -> None:
         table = rich.table.Table.grid(expand=True)
@@ -99,22 +127,16 @@ class ObserverDisplay:
         self.tty_bar = table
 
     def update_totals(self, cumulative: network.CumulativePacketStats) -> None:
-        table = rich.table.Table.grid(expand=True)
-        table.add_column()  # title
-        table.add_column(justify='right')   # Grand Total
         actives = str(self.cumulative_line.active) if self.cumulative_line.active is not None else '?'
         targets = str(self.cumulative_line.target_observed) if self.cumulative_line.target_observed is not None else '?'
         untargets = f' +{self.cumulative_line.bonus_observed}' if self.cumulative_line.bonus_observed else ''
-        table.add_row(
-            rich.text.Text(" Totals (since start)", style='bold bright_white'),
+        self.totals_text.plain = (
             f"⏬{cumulative.from_air} ⏫{cumulative.from_ground}  "
             f"|  🌐{cumulative.with_position} ❔{cumulative.no_position}  "
             f"|  📰{cumulative.squitters}  "
             f"|  🔎{targets}/{actives}{untargets}  "
-            f"|  📶{cumulative.packets}  ",
-            style='white on black'
+            f"|  📶{cumulative.packets}  "
         )
-        self.totals = table
 
     def update_log(self, ring: collections.deque) -> None:
         # WARNING: do not log from within this method.
@@ -152,7 +174,8 @@ class ObserverDisplay:
             recent = data['-1']
             current = data['0']
             forecast1d = data['1']
-            text = rich.text.Text()
+            text = self.forecast
+            text.plain = ''
             text.append(f'R{recent["R"]["Scale"]}', style=styles[recent["R"]["Text"]])
             text.append('|')
             text.append(f'S{recent["S"]["Scale"]}', style=styles[recent["S"]["Text"]])
@@ -170,7 +193,6 @@ class ObserverDisplay:
             text.append(f'S{forecast1d["S"]["Prob"]}', styles["none"]),
             text.append('|')
             text.append(f'G{forecast1d["G"]["Scale"]}', styles[forecast1d["G"]["Text"]]),
-            self.forecast = text
         except Exception as err:
             logger.warning('ignoring forecaster error', exc_info=err)
 
@@ -206,16 +228,6 @@ class CumulativeLine:
 
     def on_active(self, active_frequencies: Sequence[int]) -> None:
         self.active = len(active_frequencies)
-
-
-BASE_HEADERS = ['NOW'] + (['   '] * 4 + [' ¦ '] + ['   '] * 4 + [' ┇ ']) * 12
-PANE_BAR = rich.style.Style.parse('bright_white on bright_black')
-SUBDUED_TEXT = rich.style.Style.parse('grey50 on black')
-NORMAL_TEXT = rich.style.Style.parse('white on black')
-PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
-
-
-CellText = tuple[str | None, str | rich.style.Style | None]
 
 
 class AbstractHeatMapFormatter:
@@ -537,7 +549,7 @@ class HeatMap:
                 elements[-1] = (elements[-1][0] + text, textstyle)
             else:
                 elements.append((text, textstyle))
-        result = rich.text.Text(style=style) if style else rich.text.Text()
+        result = rich.text.Text(style=style or '')
         for element in elements:
             result.append(*element)
         return result

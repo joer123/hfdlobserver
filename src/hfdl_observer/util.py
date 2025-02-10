@@ -38,7 +38,6 @@ def make_naive_utc(when: datetime.datetime) -> datetime.datetime:
     # utc_timezone = datetime.timezone(datetime.timedelta(seconds=0))
     return when.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
-
 def deserialise_station_table(station_table: str) -> dict:
     # station table is a custom(?) "conf" format. Almost, but not quite, JSON.
     # sed -e 's/(/[/g' -e s'/)/]/g' -e 's/=/:/g' -e 's/;/,/g' -e 's/^\s*\([a-z]\+\) /"\1"/' >> ~/gs.json

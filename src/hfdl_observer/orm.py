@@ -24,7 +24,7 @@ import hfdl_observer.util as util
 logger = logging.getLogger(__name__)
 
 db = pony.Database()  # 'file::memory:?cache=shared')
-db.bind(provider='sqlite', filename=':sharedmemory:')
+db.bind(provider='sqlite', filename=':memory:')
 
 # Using `db.Entity` directly won't work, as both MyPy and Pyright won't
 # allow inheriting a class from a variable. For Pyright this declaration
@@ -73,7 +73,11 @@ class ReceivedPacket(DbEntity):  # type: ignore
     @classmethod
     @pony.db_session
     def prune(cls, before: datetime.datetime) -> None:
+        before = int(db.execute("PRAGMA page_count;"))
         pony.delete(p for p in cls if p.when < before)
+        after = int(db.execute("PRAGMA page_count;"))
+        size = int(db.execute("PRAGMA page_size;"))
+        logger.info(f'DB size was {before * size}, now {after * size}')
 
 
 # Not currently used
@@ -206,7 +210,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
     def prune_every(self, period: int) -> None:
         if self.periodic_task:
             self.periodic_task.cancel()
-        periodic_callback = bus.PeriodicCallback(period, [self.prune], True)
+        periodic_callback = bus.PeriodicCallback(period, [self.prune], False)
         self.periodic_task = asyncio.get_running_loop().create_task(periodic_callback.run())
 
     @pony.db_session

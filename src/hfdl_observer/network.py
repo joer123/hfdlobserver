@@ -60,6 +60,10 @@ PosixTimestamp = int
 HFDL_FRAME_TIME = 32
 
 
+def pseudoframe_timestamp(when: datetime.datetime) -> int:
+    return int(util.datetime_to_timestamp(when) // HFDL_FRAME_TIME) * HFDL_FRAME_TIME
+
+
 @dataclasses.dataclass
 class Station:
     station_id: int
@@ -129,9 +133,11 @@ class AbstractNetworkUpdater(bus.Publisher):
         return self.active(util.make_naive_utc(util.timestamp_to_datetime(timestamp)))
 
     def active_for_frame(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
+        # current/now/None should never be cached.
+        if at is None:
+            return self.active(util.now())
         # each ground station has its own frame period. We construct a similar one for this app, but it's not official.
-        pseudoframe_ts = int(util.datetime_to_timestamp(at or util.now()) // HFDL_FRAME_TIME) * HFDL_FRAME_TIME
-        return self._active_ts(pseudoframe_ts)
+        return self._active_ts(pseudoframe_timestamp(at))
 
     def add(self, availability: StationAvailability) -> bool:
         raise NotImplementedError()
