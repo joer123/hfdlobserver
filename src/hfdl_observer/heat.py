@@ -6,7 +6,7 @@
 
 import datetime
 import logging
-from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
+from typing import Callable, Iterable, Iterator, Mapping, Optional, Sequence
 
 import hfdl_observer.data as data
 import hfdl_observer.network as network
@@ -16,18 +16,30 @@ import hfdl_observer.util
 logger = logging.getLogger(__name__)
 
 
-class RowHeader:
+class Taggable:
+    _tags: set[str] | None = None
+
+    def tag(self, tag: str) -> None:
+        if self._tags is None:
+            self._tags = set()
+        self._tags.add(tag)
+
+    def is_tagged(self, tag: str) -> bool:
+        return self._tags is not None and tag in self._tags
+
+
+class RowHeader(Taggable):
     label: str = ''
     station_id: Optional[int] = None
-    tags: set[str]
 
     def __init__(self, label: str, station_id: Optional[int] = None, tags: Optional[Sequence[str]] = None) -> None:
         self.label = label
-        self.tags = set(tags or [])
+        for tag in tags or []:
+            self.tag(tag)
         self.station_id = station_id
 
     def __str__(self) -> str:
-        return f'[{"".join(t[0] for t in self.tags)}] #{self.station_id or "n/a"}:{self.label}'
+        return f'[{"".join(t[0] for t in self._tags or set())}] #{self.station_id or "n/a"}:{self.label}'
 
 
 class ColumnHeader:
@@ -48,73 +60,69 @@ class ColumnHeader:
         return f'{self.label}/{self.offset}'
 
 
-class Cell:
-    value: int
-    tags: set[str]
-
+class Cell(Taggable):
     def __init__(self, value: int, tags: Optional[Sequence[str]] = None) -> None:
         self.value = value
-        self.tags = set()
-        if tags:
-            self.tags.update(tags)
 
     def __str__(self) -> str:
-        return f'{self.value}[{"".join(t[0] for t in self.tags)}]'
+        return f'{self.value}[{"".join(t[0] for t in self._tags or [])}]'
 
 
-DataRows = dict[Union[int, str], Sequence[Cell]]
+DataRows = dict[int | str, Sequence[Cell]]
 
 
 class Table:
     column_headers: Sequence[ColumnHeader]
-    row_headers: dict[Union[int, str], RowHeader]
-    data: DataRows
+    row_headers: dict[int | str, RowHeader]
+    bins: DataRows
 
     def __init__(
-        self, data: Mapping[Union[str, int], Sequence[int]], bin_size: int, start: Optional[datetime.datetime] = None
+        self, counts: Mapping[int | str, Sequence[int]], bin_size: int, start: Optional[datetime.datetime] = None
     ) -> None:
-        self.data = {k: [Cell(v) for v in r] for k, r in data.items()}
-        self.row_headers = {k: RowHeader(str(k)) for k in data.keys()}
+        self.bins = {k: [Cell(v) for v in r] for k, r in counts.items()}
+        self.row_headers = {k: RowHeader(str(k)) for k in counts.keys()}
         when = start if start is not None else hfdl_observer.util.now()
-        if data:
-            num_columns = max(len(r) for r in data.values())
+        if counts:
+            num_columns = max(len(r) for r in counts.values())
             self.column_headers = [
                 ColumnHeader(n, when - datetime.timedelta(seconds=n * bin_size), bin_size) for n in range(num_columns)
             ]
         else:
             self.column_headers = []
 
-    def rows_matching(self, condition: Callable[[Union[int, str], Sequence[Cell]], bool]) -> DataRows:
+    def rows_matching(self, condition: Callable[[int | str, Sequence[Cell]], bool]) -> DataRows:
         out = {}
-        for k, cells in self.data.items():
+        for k, cells in self:
             if callable(condition) and condition(k, cells):
                 out[k] = cells
         return out
 
-    def nonzero_rows(self) -> DataRows:
-        return self.rows_matching(lambda key, cells: sum(cell.value for cell in cells) > 0)
-
     def tag_rows(
         self,
-        keys: Iterable[Union[int, str]],
+        keys: Iterable[int | str],
         tags: Optional[Sequence[str]],
-        default_factory: Optional[Callable[[Union[int, str], Sequence[str]], RowHeader]] = None,
+        default_factory: Optional[Callable[[int | str, Sequence[str]], RowHeader]] = None,
     ) -> None:
         for key in keys:
-            if key in self.data:
-                self.row_headers[key].tags.update(tags or [])
+            if key in self.bins:
+                for tag in tags or []:
+                    self.row_headers[key].tag(tag)
             elif default_factory:
-                self.data[key] = [Cell(0) for col in self.column_headers]
+                row = []
+                for col in self.column_headers:
+                    row.append(Cell(0))
+                self.bins[key] = row  # [Cell(0) for col in self.column_headers]
                 self.row_headers[key] = default_factory(key, tags or [])
 
-    def sort(self) -> None:
-        ordered = {k: self.data[k] for k in sorted(self.data.keys())}
-        self.data = ordered
+    def __iter__(self) -> Iterator[tuple[int | str, Sequence[Cell]]]:
+        order = sorted(self.bins.keys())
+        for k in order:
+            yield (k, self.bins[k])
 
     def __str__(self) -> str:
         out = []
         out.append('\t\t' + '\t'.join(str(header) for header in self.column_headers))
-        for k, cells in self.data.items():
+        for k, cells in self.bins.items():
             out.append(f'{self.row_headers[k]}\t{"\t".join(str(cell) for cell in cells)}')
         return '\n'.join(out)
 
@@ -132,7 +140,7 @@ class TableByFrequency(Table):
             for a in network.UPDATER.active_for_frame(when):
                 for f in a.frequencies:
                     column_active[f] = a
-            for freq, cells in self.data.items():
+            for freq, cells in self.bins.items():
                 cell = cells[ix]
                 if cell.value is None:
                     continue
@@ -142,17 +150,17 @@ class TableByFrequency(Table):
                 if station:
                     row_header.station_id = station.station_id
                     if station.frequencies and freq in station.frequencies:
-                        cell.tags.add('active')
-                        row_header.tags.add('active')
+                        cell.tag('active')
+                        row_header.tag('active')
                     match (station.stratum):
                         case (network.Strata.SELF.value):
-                            row_header.tags.add('local')
+                            row_header.tag('local')
                         case (network.Strata.SQUITTER.value):
-                            row_header.tags.add('network')
+                            row_header.tag('network')
                         case (None):
                             pass
                         case (_):
-                            row_header.tags.add('guess')
+                            row_header.tag('guess')
                 else:
                     row_header.station_id = network.STATIONS[freq].station_id
 

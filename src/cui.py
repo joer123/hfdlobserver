@@ -10,7 +10,7 @@ import functools
 import datetime
 import logging
 
-from typing import Any, Callable, ItemsView, Optional, Sequence, Union
+from typing import Any, Generic, Callable, Iterator, Optional, Sequence, TypeVar, Union
 
 import rich.console
 import rich.highlighter
@@ -161,7 +161,7 @@ class ObserverDisplay:
         if table.row_count:
             self.counts = table
 
-    def on_forecast(self, data: Any) -> None:
+    def on_forecast(self, forecast: Any) -> None:
         try:
             styles = {
                 "extreme": "yellow1 on dark_red",
@@ -171,9 +171,9 @@ class ObserverDisplay:
                 "minor": "black on gold1",
                 "none": "white on bright_black"
             }
-            recent = data['-1']
-            current = data['0']
-            forecast1d = data['1']
+            recent = forecast['-1']
+            current = forecast['0']
+            forecast1d = forecast['1']
             text = self.forecast
             text.plain = ''
             text.append(f'R{recent["R"]["Scale"]}', style=styles[recent["R"]["Text"]])
@@ -230,21 +230,27 @@ class CumulativeLine:
         self.active = len(active_frequencies)
 
 
-class AbstractHeatMapFormatter:
-    source: heat.Table
-    strokes: dict[int, Optional[str]] = collections.defaultdict(lambda: None)
-    strokes.update({0: '┇', 5: '¦'})
+STROKES: dict[int, None | str] = collections.defaultdict(lambda: None)
+STROKES.update({0: '┇', 5: '¦'})
+
+
+TableSourceT = TypeVar('TableSourceT', bound='heat.Table')
+
+
+class AbstractHeatMapFormatter(Generic[TableSourceT]):
+    source: TableSourceT
+    strokes = STROKES
     root_str: str
 
     @functools.cached_property
     def max_count(self) -> int:
         return max(
-            max(cell.value if cell else 0 for cell in row or [0]) for row in self.source.data.values()  # type: ignore
+            max(c.value if c else 0 for c in row or [0]) for row in self.source.bins.values()  # type: ignore
         )
 
     @property
     def is_empty(self) -> bool:
-        return len(self.source.data) == 0
+        return len(self.source.bins) == 0
 
     @functools.cache
     def symbol(self, amount: int) -> str:
@@ -306,13 +312,11 @@ class AbstractHeatMapFormatter:
         cells.append(self.cumulative(row_data))
         return cells
 
-    def rows(self) -> ItemsView[Union[int, str], Sequence[heat.Cell]]:
-        return self.source.data.items()
+    def rows(self) -> Iterator[tuple[Union[int, str], Sequence[heat.Cell]]]:
+        return (row for row in self.source)
 
 
-class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
-    source: heat.TableByFrequency
-
+class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency]):
     def __init__(
         self,
         bin_size: int,
@@ -341,7 +345,6 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
         self.show_targetting = show_targetting
         self.show_quiet = show_quiet
         self.source.fill_active_state()
-        self.source.sort()
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -350,13 +353,13 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
         style = NORMAL_TEXT
         if header.station_id:
             infix = network.STATION_ABBREVIATIONS[header.station_id]
-        if 'targetted' in header.tags or any('targetted' in cell.tags for cell in row):
+        if header.is_tagged('targetted') or any(cell.is_tagged('targetted') for cell in row):
             if any(cell.value for cell in row):
                 symbol = '▣'  # ▣🞔□⬚
                 style = PROMINENT_TEXT
             else:
                 symbol = '🞔'
-        elif 'active' in header.tags or any('active' in cell.tags for cell in row):
+        elif header.is_tagged('active') or any(cell.is_tagged('active') for cell in row):
             symbol = '□'
         else:
             symbol = '⬚'
@@ -366,11 +369,11 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
             symbol = ' '
         stratum = ' '
         if self.show_confidence:
-            if 'local' in header.tags:
+            if header.is_tagged('local'):
                 stratum = '●'  # ◉
-            elif 'network' in header.tags:
+            elif header.is_tagged('network'):
                 stratum = '◐'  # ◒⊙⬓
-            elif 'guess' in header.tags:
+            elif header.is_tagged('guess'):
                 stratum = '○'
         return (f'{symbol}{infix: >9}{header.label: >6} {stratum} ', style)
 
@@ -387,8 +390,8 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
         if cell.value:
             style = self.style(cell.value)
             text = ' ' + self.symbol(cell.value) + ' '
-        elif 'active' in cell.tags and self.show_active_line:
-            if 'targetted' in row_header.tags:
+        elif self.show_active_line and cell.is_tagged('active'):
+            if row_header.is_tagged('targetted'):
                 text = f'─{stroke or "─"}─'
             else:
                 text = f'⠒{stroke or "⠒"}⠒'  # ┄┄┄' # ╴╴╴'  # ┈┈┈
@@ -397,9 +400,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter):
         return (text, style)
 
 
-class HeatMapByBandFormatter(AbstractHeatMapFormatter):
-    source: heat.TableByBand
-
+class HeatMapByBandFormatter(AbstractHeatMapFormatter[heat.TableByBand]):
     def __init__(
         self,
         bin_size: int,
@@ -417,7 +418,6 @@ class HeatMapByBandFormatter(AbstractHeatMapFormatter):
             for allocated in network.STATIONS.assigned().values():
                 bands.update(int(f // 1000) for f in allocated)
             self.source.tag_rows(bands, ['band'], default_factory=rowheader_factory)
-        self.source.sort()
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -429,9 +429,7 @@ class HeatMapByBandFormatter(AbstractHeatMapFormatter):
         return (f' {header.label: >13} MHz ', style)
 
 
-class HeatMapByStationFormatter(AbstractHeatMapFormatter):
-    source: heat.TableByStation
-
+class HeatMapByStationFormatter(AbstractHeatMapFormatter[heat.TableByStation]):
     def __init__(
         self,
         bin_size: int,
@@ -439,7 +437,6 @@ class HeatMapByStationFormatter(AbstractHeatMapFormatter):
     ) -> None:
         self.bin_size = bin_size
         self.source = heat.TableByStation(self.bin_size, num_bins)
-        self.source.sort()
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -451,9 +448,7 @@ class HeatMapByStationFormatter(AbstractHeatMapFormatter):
         return (f' {header.label.split(",", 1)[0].strip(): >17} ', style)
 
 
-class HeatMapByAgentFormatter(AbstractHeatMapFormatter):
-    source: heat.TableByAgent
-
+class HeatMapByAgentFormatter(AbstractHeatMapFormatter[heat.TableByAgent]):
     def __init__(
         self,
         bin_size: int,
@@ -461,7 +456,6 @@ class HeatMapByAgentFormatter(AbstractHeatMapFormatter):
     ) -> None:
         self.bin_size = bin_size
         self.source = heat.TableByAgent(self.bin_size, num_bins)
-        self.source.sort()
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -537,7 +531,7 @@ class HeatMap:
             self.start()
 
     def maybe_render(self) -> None:
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        now = util.now().timestamp()
         if now - self.last_render_time > MAP_REFRESH_PERIOD:
             self.render()
 
@@ -561,6 +555,7 @@ class HeatMap:
         # combines fragments into the smallest number of Text segments possible, and represents each row on the table
         # with a single Text. Not ideal, but the concept of Cells is retained as it its flexibility
         #
+        self.last_render_time = util.now().timestamp()
         width = self.display.current_width - (3 + 9 + 6 + 4 + 1)
         possible_bins = width // 3
         if self.bin_size > 60:
@@ -585,6 +580,9 @@ class HeatMap:
             table.add_row(f" 📊 per {bin_str}", style=PANE_BAR)
             table.add_row(" Awaiting data...")
         self.display.update_counts(table)
+        # for reasons I don't understand, source.source will not get garbage collected. Since we're done with the
+        # source, it can be del'd, but it still feels dirty.
+        del source.source
 
     async def run(self) -> None:
         try:
@@ -676,7 +674,6 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
 
     def observing(
         observer: hfdlobserver.HFDLObserver,
-        # packet_counter: network.BinnedPacketCounter,
         cumulative: network.CumulativePacketStats,
     ) -> None:
         ticker.register(observer)  # , packet_counter)

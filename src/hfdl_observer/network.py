@@ -128,7 +128,7 @@ class AbstractNetworkUpdater(bus.Publisher):
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         raise NotImplementedError()
 
-    @functools.lru_cache(maxsize=256)
+    @functools.lru_cache(maxsize=512)
     def _active_ts(self, timestamp: int) -> Sequence[StationAvailability]:
         return self.active(util.make_naive_utc(util.timestamp_to_datetime(timestamp)))
 
@@ -228,18 +228,6 @@ class AbstractNetworkUpdater(bus.Publisher):
             ))
             if added:
                 updates += 1
-                # try:
-                #     squitted = STATIONS[sid]
-                # except AttributeError:
-                #     pass  # loading, cannot output or update
-                # else:
-                #     if (
-                #         util.now() <= valid_to.astimezone(datetime.timezone.utc)
-                #         or (not squitted.active_frequencies and stratum > Strata.CACHE.value)
-                #     ):
-                #         squitted.update_active(frequencies)
-                #     logger.debug(f'community update for #{squitted.station_id}:{squitted.station_name}')
-                # logger.debug(f'adding availability for {sid} {stratum} {valid_at}')
         if updates:
             self.updated(self.current())
 

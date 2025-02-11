@@ -27,6 +27,7 @@ import hfdl_observer.hfdl
 import hfdl_observer.listeners
 import hfdl_observer.manage
 import hfdl_observer.network as network
+import hfdl_observer.util as util
 
 import hfdl_observer.orm as orm
 
@@ -35,6 +36,7 @@ import settings
 
 
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
+TRACEMALLOC = False
 
 
 class HFDLObserver(hfdl_observer.bus.Publisher):
@@ -145,10 +147,30 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
 async def async_observe(observer: HFDLObserver) -> None:
     logger.info("Starting observer")
 
+    if TRACEMALLOC:
+        import tracemalloc
+        tracemalloc.start()
+        last_snapshot = tracemalloc.take_snapshot()
     try:
         observer.start()
         while observer.running:
             await asyncio.sleep(1)
+            if TRACEMALLOC:
+                await asyncio.sleep(59)
+                p = pathlib.Path('memory.trace')
+                with p.open("a", encoding='utf8') as f:
+                    f.write('====\n')
+                    f.write(f'{util.now()}\n')
+                    snapshot = tracemalloc.take_snapshot()
+                    try:
+                        diff = snapshot.compare_to(last_snapshot, 'lineno')
+                        for entry in diff:
+                            f.write(f'{entry.size} | {entry.size_diff} | {" ".join(str(x) for x in entry.traceback.format(1))}\n')
+                    except Exception as err:
+                        logger.error('error in tracemallocery', exc_info=err)
+                    else:
+                        logger.info('memory checkpoint')
+                    last_snapshot = snapshot
     except asyncio.CancelledError:
         logger.error('Observer loop cancelled')
         observer.kill()

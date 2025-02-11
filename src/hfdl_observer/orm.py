@@ -29,7 +29,7 @@ db.bind(provider='sqlite', filename=':memory:')
 
 
 @functools.cache
-@pony.db_session
+@pony.db_session(strict=True)
 def pagesize() -> int:
     return int(db.execute("PRAGMA page_size;").fetchone()[0])
 
@@ -57,12 +57,12 @@ class StationAvailability(DbEntity):  # type: ignore
         return network.StationAvailability(**self.to_dict())
 
     @classmethod
-    @pony.db_session
+    @pony.db_session(strict=True)
     def prune(cls) -> None:
-        when = util.now() - datetime.timedelta(days=1)
+        when = util.make_naive_utc(util.now() - datetime.timedelta(days=1))
         pony.delete(a for a in cls if a.valid_to is not None and a.valid_to < when)
         pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
-        logger.info(f'DB size is {pages * pagesize()}')
+        logger.debug(f'DB size is {pages * pagesize()}')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -81,13 +81,13 @@ class ReceivedPacket(DbEntity):  # type: ignore
         return data.ReceivedPacket(**self.to_dict())
 
     @classmethod
-    @pony.db_session
+    @pony.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         try:
             initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
             pony.delete(p for p in cls if p.when < before)
             after = int(db.execute("PRAGMA page_count;").fetchone()[0])
-            logger.info(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
+            logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 
@@ -106,7 +106,7 @@ class FrequencyWatch(DbEntity):  # type: ignore
         return data.FrequencyWatch(**self.to_dict())
 
     @classmethod
-    @pony.db_session
+    @pony.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         pony.delete(p for p in cls if p.ended < before)
 
@@ -138,17 +138,17 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         super().updated(availabilities)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session
+    @pony.db_session(strict=True)
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         super().on_hfdl(packet_info)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session
+    @pony.db_session(strict=True)
     def on_community(self, airframes: dict) -> None:
         super().on_community(airframes)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session
+    @pony.db_session(strict=True)
     def on_systable(self, station_table: str) -> None:
         super().on_systable(station_table)
 
@@ -165,7 +165,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         row = q.first()
         return row.as_local() if row else None
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[network.StationAvailability]:
         found = []
         sids = network.STATIONS.by_id.keys()
@@ -181,14 +181,14 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
                 #     network.STATIONS.refresh()
         return found
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def current(self) -> Sequence[network.StationAvailability]:
         return self.active()
 
     def current_freqs(self) -> Sequence[int]:
         return list(itertools.chain(*[a.frequencies for a in self.current()]))
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def station(self, station_id: int, at: Optional[datetime.datetime] = None) -> Optional[network.StationAvailability]:
         return self._for_station(station_id, at=at)
 
@@ -199,7 +199,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
 class PacketWatcher(data.AbstractPacketWatcher):
     periodic_task: Optional[asyncio.Task] = None
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         position = packet_info.position or (None, None)
         ReceivedPacket(
@@ -224,10 +224,10 @@ class PacketWatcher(data.AbstractPacketWatcher):
     def prune_every(self, period: int) -> None:
         if self.periodic_task:
             self.periodic_task.cancel()
-        periodic_callback = bus.PeriodicCallback(period, [self.prune], True)
+        periodic_callback = bus.PeriodicCallback(period, [self.prune], False)
         self.periodic_task = asyncio.get_event_loop().create_task(periodic_callback.run())
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -237,7 +237,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[packet.frequency][bin_number] += 1
         return data
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def packets_by_agent(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -247,7 +247,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[packet.agent or 'unknown'][bin_number] += 1
         return data
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -258,7 +258,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[f'#{station.station_id}. {station.station_name}'][bin_number] += 1
         return data
 
-    @pony.db_session
+    @pony.db_session(strict=True)
     def packets_by_band(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
