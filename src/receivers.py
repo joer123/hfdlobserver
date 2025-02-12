@@ -212,3 +212,7 @@ class ReceiverPipe(hfdl_observer.process.ProcessHarness):
 
     def commandline(self) -> list[str]:
         return self.cmd
+
+
+class DirectReceiver(LocalReceiver):
+    pass

@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 
 import hfdl_observer.data
 import hfdl_observer.process
+import hfdl_observer.util as util
 
 import settings
 
@@ -22,7 +23,11 @@ import settings
 logger = logging.getLogger(__name__)
 
 
-class IQDecoderCommand(hfdl_observer.process.Command):
+class DumphfdlCommand(hfdl_observer.process.Command):
+    pass
+
+
+class IQDecoderCommand(DumphfdlCommand):
     pass
 
 
@@ -55,19 +60,16 @@ class BaseDecoder:
         return f'{self.__class__.__name__}@{self.name}'
 
 
-class IQDecoder(BaseDecoder):
+class Dumphfdl(BaseDecoder):
+    def listen_args(self) -> list[str]:
+        raise NotImplementedError()
+
     def commandline(self) -> list[str]:
         if not self.channel or not self.channel.frequencies:
             logger.warning(f'{self} requested an empty command line')
             return []
-        cmd = [
-            str(settings.as_executable_path(self.config['decoder_path'])),
-            '--iq-file', '-',
-            '--sample-rate', str(self.channel.allowed_width * 1000),
-            '--sample-format', 'CS16',
-            '--read-buffer-size', '9600',
-            '--centerfreq', str(self.channel.center),
-        ]
+        cmd = [str(settings.as_executable_path(self.config['decoder_path']))]
+        cmd.extend(self.listen_args())
         # map some common options
         normalizer: Callable[[Any], Any]
         opt_map: list[tuple[str, str, Callable]] = [
@@ -119,12 +121,26 @@ class IQDecoder(BaseDecoder):
         cmd.extend(str(f) for f in self.channel.frequencies)
         return cmd
 
+    def valid_return_codes(self) -> list[int]:
+        return [0, -6, -11, -15]
+
+
+class IQDecoder(Dumphfdl):
+    def listen_args(self) -> list[str]:
+        return [
+            '--iq-file', '-',
+            '--sample-rate', str(self.channel.allowed_width * 1000),
+            '--sample-format', 'CS16',
+            '--read-buffer-size', '9600',
+            '--centerfreq', str(self.channel.center),
+        ]
+
 
 class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
     iq_fd: int
 
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
-        BaseDecoder.__init__(self, name, config, listener)
+        IQDecoder.__init__(self, name, config, listener)
         hfdl_observer.process.ProcessHarness.__init__(self)
         self.settle_time = config.get('settle_time', 0)
 
@@ -153,7 +169,7 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
             on_running=self.on_execute,
             # -6 : SIGABRT. "The futex facility returned an unexpected error code."
             # -11 is speculative. Some weirdness on odroid
-            valid_return_codes=[0, -6, -11, -15],
+            valid_return_codes=self.valid_return_codes(),
         )
         return command
 
@@ -164,3 +180,53 @@ class DummyDecoder(IQDecoderProcess):
         logger.debug(f'{self} command {self.commandline()}')
         logger.debug(f'{self} listening on {channel}')
         return asyncio.get_running_loop().create_task(asyncio.sleep(0.1))
+
+
+class SoapySDRDecoder(Dumphfdl):
+    def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
+        super().__init__(name, config, listener)
+        self.sample_rates = sorted(util.normalize_ranges(config.get('sample-rates', [])))
+
+    def listen_args(self) -> list[str]:
+        """
+            soapysdr:
+                driver: sdrplay
+                serial: 1234567890
+            device-settings:
+                ...: ...
+            # sample-rates: list of ranges or specific sample rates available.
+            gain: ...
+            gain-elements:
+                elem: value
+                elem2: value2
+            freq-correction: float
+            freq-offset: float
+            antenna: string
+        """
+        def nested_args(incoming: dict | str) -> str:
+            if isinstance(incoming, dict):
+                return ','.join(f'{k}={v}' for k, v in incoming.items())
+            else:
+                return incoming
+        args = []
+        arg_map = [
+            ('gain', 'gain', None),
+            ('antenna', 'antenna', None),
+            ('freq_offset', 'freq-offset', None),
+            ('freq_correction', 'freq-correction', None),
+            ('soapysdr', 'soapysdr', nested_args),
+            ('gain_elements', 'gain-elements', nested_args),
+            ('device_settings', 'device-settings', nested_args),
+        ]
+        for from_opt, to_opt, normalizer in arg_map:
+            value = self.config.get(from_opt, None)
+            if value is not None:
+                opt_value: str
+                if normalizer:
+                    opt_value = normalizer(value)
+                else:
+                    opt_value = str(value)
+                args.append(f'--{to_opt}')
+                args.append(opt_value)
+        # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
+        return args
