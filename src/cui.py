@@ -575,16 +575,16 @@ class HeatMap:
                 if cells:
                     row_text = self.celltexts_to_text(cells, None)
                     table.add_row(row_text, style="white on black")
+            # for reasons I don't understand, source.source will not get garbage collected. Since we're done with the
+            # source, it can be del'd, but it still feels dirty. Similar with source.column_headers. del'ing `source`
+            # alone is insufficient.
+            del source.source
+            del source.column_headers
         else:
             table = rich.table.Table.grid(expand=True)
             table.add_row(f" 📊 per {bin_str}", style=PANE_BAR)
             table.add_row(" Awaiting data...")
         self.display.update_counts(table)
-        # for reasons I don't understand, source.source will not get garbage collected. Since we're done with the
-        # source, it can be del'd, but it still feels dirty. Similar with source.column_headers. del'ing `source`
-        # alone is insufficient.
-        del source.source
-        del source.column_headers
 
     async def run(self) -> None:
         try:
