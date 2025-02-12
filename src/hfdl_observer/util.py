@@ -23,20 +23,16 @@ def tobool(val: Union[bool, str, int]) -> bool:
 
 
 def now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def timestamp_to_datetime(timestamp: float) -> datetime.datetime:
-    return datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
+    return datetime.datetime.fromtimestamp(timestamp, datetime.UTC)
 
 
 def datetime_to_timestamp(when: datetime.datetime) -> float:
     return when.timestamp()
 
-
-def make_naive_utc(when: datetime.datetime) -> datetime.datetime:
-    # utc_timezone = datetime.timezone(datetime.timedelta(seconds=0))
-    return when.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
 def deserialise_station_table(station_table: str) -> dict:
     # station table is a custom(?) "conf" format. Almost, but not quite, JSON.
@@ -79,3 +75,14 @@ def spectrum_colour(value: int, max_value: int) -> tuple[int, int, int]:
     hue = (start_hue + hue_range * effective / max_value) % 360
     hsv = hsv_rgb(hue / 360, 1, 1)
     return (int(hsv[0] * 255), int(hsv[1] * 255), int(hsv[2] * 255))
+
+
+def normalize_ranges(ranges: list[int | list[int]]) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    for arange in ranges:
+        if arange:
+            if isinstance(arange, list):
+                result.append(tuple((arange + arange[-1:])[:2]))  # type: ignore # I'm too clever for mypy
+            else:
+                result.append((arange, arange))
+    return result

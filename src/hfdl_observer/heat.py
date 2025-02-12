@@ -61,6 +61,8 @@ class ColumnHeader:
 
 
 class Cell(Taggable):
+    value: int
+
     def __init__(self, value: int, tags: Optional[Sequence[str]] = None) -> None:
         self.value = value
 
@@ -108,10 +110,7 @@ class Table:
                 for tag in tags or []:
                     self.row_headers[key].tag(tag)
             elif default_factory:
-                row = []
-                for col in self.column_headers:
-                    row.append(Cell(0))
-                self.bins[key] = row  # [Cell(0) for col in self.column_headers]
+                self.bins[key] = [Cell(0) for col in self.column_headers]
                 self.row_headers[key] = default_factory(key, tags or [])
 
     def __iter__(self) -> Iterator[tuple[int | str, Sequence[Cell]]]:
@@ -142,8 +141,6 @@ class TableByFrequency(Table):
                     column_active[f] = a
             for freq, cells in self.bins.items():
                 cell = cells[ix]
-                if cell.value is None:
-                    continue
                 row_header = self.row_headers[freq]
                 station = column_active.get(int(freq), None)
 

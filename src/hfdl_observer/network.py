@@ -130,7 +130,7 @@ class AbstractNetworkUpdater(bus.Publisher):
 
     @functools.lru_cache(maxsize=512)
     def _active_ts(self, timestamp: int) -> Sequence[StationAvailability]:
-        return self.active(util.make_naive_utc(util.timestamp_to_datetime(timestamp)))
+        return self.active(util.timestamp_to_datetime(timestamp))
 
     def active_for_frame(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         # current/now/None should never be cached.
@@ -150,7 +150,7 @@ class AbstractNetworkUpdater(bus.Publisher):
             self.publish('availability', util.now())
 
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
-        valid_at = util.make_naive_utc(util.timestamp_to_datetime(packet_info.timestamp))
+        valid_at = util.timestamp_to_datetime(packet_info.timestamp)
         squitter = packet_info.get('spdu.gs_status', default=[])
         performance = packet_info.get('lpdu.hfnpdu.freq_data', default=[])
         if squitter:
@@ -190,9 +190,6 @@ class AbstractNetworkUpdater(bus.Publisher):
             )
             if added:
                 updates += 1
-                # squitted = STATIONS[sid]
-                # squitted.update_active(frequencies)
-                # logger.debug(f'{kind} update for #{squitted.station_id}:{squitted.station_name}')
         if updates:
             self.publish("event", (kind, agent, packet_info.timestamp))
             self.updated(self.current())
@@ -211,10 +208,14 @@ class AbstractNetworkUpdater(bus.Publisher):
             last_updated = gs['last_updated']
             if last_updated < 0:
                 last_updated += util.now().timestamp()
-            stratum = gs.get('stratum', Strata.CACHE.value)
-            valid_at = util.make_naive_utc(util.timestamp_to_datetime(last_updated))
+            try:
+                stratum = int(gs.get('stratum', Strata.CACHE.value))
+            except ValueError:
+                stratum = Strata.CACHE.value
+
+            valid_at = util.timestamp_to_datetime(last_updated)
             valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum]
-            frequencies = sorted(gs['frequencies']['active'])
+            frequencies = sorted(gs['frequencies'].get('active', []))
             from_station = gs.get('update_source', None)
 
             added = self.add(StationAvailability(
@@ -235,7 +236,7 @@ class AbstractNetworkUpdater(bus.Publisher):
         data = util.deserialise_station_table(station_table)
 
         stratum = Strata.SYSTABLE.value
-        valid_at = util.make_naive_utc(util.now())
+        valid_at = util.now()
         valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum]
         hfdl_stations: dict[int, Station] = {}
         for gs in data['stations']:

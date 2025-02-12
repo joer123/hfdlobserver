@@ -18,7 +18,7 @@ import hfdl_observer.env
 import hfdl_observer.data
 import hfdl_observer.hfdl
 import hfdl_observer.network
-import hfdl_observer.util
+import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class NetworkOverview(hfdl_observer.bus.Publisher):
             for station in current:
                 sd = {
                     'id': station.station_id,
-                    'last_updated': hfdl_observer.util.datetime_to_timestamp(station.valid_at),
+                    'last_updated': util.datetime_to_timestamp(station.valid_at),
                     'name': hfdl_observer.network.STATIONS[station.station_id].station_name,
                     'when': station.valid_at.astimezone(datetime.timezone.utc).isoformat(),
                     'stratum': station.stratum,
@@ -171,13 +171,7 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
         self.config = config
         self.ranked_station_ids = config['ranked_stations']
         ignores = config.get('ignored_frequencies', [])
-        self.ignored_frequencies = ignored = []
-        for ignore in ignores:
-            if ignore:
-                if isinstance(ignore, list):
-                    ignored.append(tuple((ignore + ignore[-1:])[:2]))
-                else:
-                    ignored.append((ignore, ignore))
+        self.ignored_frequencies = util.normalize_ranges(ignores)
         self.proxies = []
         self.reaper = Reaper()
         self.reaper.subscribe('dead-receiver', self.on_dead_receiver)
@@ -219,13 +213,13 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
         self,
         channels: list[hfdl_observer.data.ObservingChannel]
     ) -> list[hfdl_observer.data.ObservingChannel]:
-        if not self.proxies:
-            return []
-        keeps = {}
-        starts = []
         possible_frequencies = list(itertools.chain(*[c.frequencies for c in channels]))
         active_frequencies = [f for f in possible_frequencies if hfdl_observer.network.STATIONS.is_active(f)]
+        if not self.proxies:
+            return []
 
+        keeps = {}
+        starts = []
         chosen_channels = channels[:len(self.proxies)]
         targetted_frequencies = []
         untargetted_frequencies = []
