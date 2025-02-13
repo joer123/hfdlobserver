@@ -188,7 +188,7 @@ class TableByStation(Table):
         packets = data.PACKET_WATCHER.packets_by_station(bin_size, num_bins)
         super().__init__(packets, bin_size)
         for k, rh in self.row_headers.items():
-            rh.station_id = k
+            rh.station_id = int(k)
             rh.label = f'#{k}. {network.STATIONS[k].station_name}'
 
     def key_for_row(self, row_id: int | str) -> Any:

@@ -299,8 +299,8 @@ class PacketWatcher(data.AbstractPacketWatcher):
         return data
 
     @pony.db_session(strict=True)
-    def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
-        data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
+    def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+        data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
         for packet in cls.recent_packets(when):

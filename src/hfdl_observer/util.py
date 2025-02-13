@@ -23,11 +23,11 @@ def tobool(val: Union[bool, str, int]) -> bool:
 
 
 def now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.UTC)
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def timestamp_to_datetime(timestamp: float) -> datetime.datetime:
-    return datetime.datetime.fromtimestamp(timestamp, datetime.UTC)
+    return datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
 
 
 def datetime_to_timestamp(when: datetime.datetime) -> float:
