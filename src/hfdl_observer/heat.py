@@ -136,7 +136,8 @@ class Table:
         out = []
         out.append('\t\t' + '\t'.join(str(header) for header in self.column_headers))
         for k, cells in self.bins.items():
-            out.append(f'{self.row_headers[k]}\t{"\t".join(str(cell) for cell in cells)}')
+            cells_text = "\t".join(str(cell) for cell in cells)
+            out.append('\t'.join([str(self.row_headers[k]), cells_text]))
         return '\n'.join(out)
 
 
