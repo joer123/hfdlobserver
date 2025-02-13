@@ -6,7 +6,7 @@
 
 import datetime
 import logging
-from typing import Callable, Iterable, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Sequence
 
 import hfdl_observer.data as data
 import hfdl_observer.network as network
@@ -27,6 +27,12 @@ class Taggable:
     def is_tagged(self, tag: str) -> bool:
         return self._tags is not None and tag in self._tags
 
+    def tags_as_str(self) -> str:
+        tags = "".join(t[0] for t in self._tags or [])
+        if tags:
+            return f'[{tags}]'
+        return ''
+
 
 class RowHeader(Taggable):
     label: str = ''
@@ -39,7 +45,11 @@ class RowHeader(Taggable):
         self.station_id = station_id
 
     def __str__(self) -> str:
-        return f'[{"".join(t[0] for t in self._tags or set())}] #{self.station_id or "n/a"}:{self.label}'
+        if self.station_id:
+            sid = f'#{self.station_id}:'
+        else:
+            sid = ''
+        return f'{self.tags_as_str()} {sid}{self.label}'
 
 
 class ColumnHeader:
@@ -57,7 +67,7 @@ class ColumnHeader:
         self.label = str(index)
 
     def __str__(self) -> str:
-        return f'{self.label}/{self.offset}'
+        return f'{self.label} @ {self.offset}'
 
 
 class Cell(Taggable):
@@ -67,7 +77,7 @@ class Cell(Taggable):
         self.value = value
 
     def __str__(self) -> str:
-        return f'{self.value}[{"".join(t[0] for t in self._tags or [])}]'
+        return f'{self.value}{self.tags_as_str()}'
 
 
 DataRows = dict[int | str, Sequence[Cell]]
@@ -113,8 +123,12 @@ class Table:
                 self.bins[key] = [Cell(0) for col in self.column_headers]
                 self.row_headers[key] = default_factory(key, tags or [])
 
+    def key_for_row(self, row_id: int | str) -> Any:
+        # default sorts by the row_id itself.
+        return row_id
+
     def __iter__(self) -> Iterator[tuple[int | str, Sequence[Cell]]]:
-        order = sorted(self.bins.keys())
+        order = sorted(self.bins.keys(), key=self.key_for_row)
         for k in order:
             yield (k, self.bins[k])
 
@@ -172,6 +186,10 @@ class TableByStation(Table):
     def __init__(self, bin_size: int, num_bins: int) -> None:
         packets = data.PACKET_WATCHER.packets_by_station(bin_size, num_bins)
         super().__init__(packets, bin_size)
+
+    def key_for_row(self, row_id: int | str) -> Any:
+        # we need to sort by station ID. so, indirect lookup
+        return self.row_headers[row_id].station_id or 0
 
 
 class TableByAgent(Table):
