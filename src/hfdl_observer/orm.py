@@ -85,12 +85,14 @@ class StationAvailability(DbEntity):  # type: ignore
     @classmethod
     @pony.db_session(strict=True)
     def prune(cls) -> None:
+        before_prune = pony.count(a for a in StationAvailability)
         horizon = to_timestamp(util.now() - datetime.timedelta(days=1))
         pony.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
-        pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
-        logger.debug(f'DB size is {pages * pagesize()}')
-        left = pony.count(a for a in StationAvailability)
-        logger.info(f'{left} StationAvailability records')
+        # pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
+        # logger.debug(f'DB size is {pages * pagesize()}')
+        after_prune = pony.count(a for a in StationAvailability)
+        if after_prune < before_prune:
+            logger.info(f'pruned {before_prune - after_prune} StationAvailability records')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -114,11 +116,15 @@ class ReceivedPacket(DbEntity):  # type: ignore
     @pony.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         try:
+            before_prune = pony.count(r for r in ReceivedPacket)
             horizon = to_timestamp(before)
-            initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
+            # initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
             pony.delete(p for p in ReceivedPacket if p.when < horizon)
-            after = int(db.execute("PRAGMA page_count;").fetchone()[0])
-            logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
+            # after = int(db.execute("PRAGMA page_count;").fetchone()[0])
+            # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
+            after_prune = pony.count(r for r in ReceivedPacket)
+            if after_prune < before_prune:
+                logger.info(f'pruned {before_prune - after_prune} ReceivedPacket records')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 
@@ -300,7 +306,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
         for packet in cls.recent_packets(when):
             bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
             station = network.STATIONS[packet.frequency]
-            data[f'#{station.station_id}. {station.station_name}'][bin_number] += 1
+            data[station.station_id][bin_number] += 1
         return data
 
     @pony.db_session(strict=True)
