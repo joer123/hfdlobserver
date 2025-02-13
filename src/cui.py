@@ -302,8 +302,8 @@ class AbstractHeatMapFormatter(Generic[TableSourceT]):
             style = self.style(cell.value)
             text = self.symbol(cell.value)
         else:
-            text = f' {stroke or "·"} '
-        return (text, style)
+            text = stroke or "·"
+        return (f' {text} ', style)
 
     def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[CellText]:
         row_header = self.source.row_headers[row_id]
