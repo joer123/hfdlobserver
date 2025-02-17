@@ -71,7 +71,7 @@ class ObservingChannel:
 
 class ChannelObserver:
     def observable_widths(self) -> list[int]:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def width_for(self, frequencies: list[int]) -> int:
         needed = max(hfdl.HFDL_CHANNEL_WIDTH, max(frequencies) - min(frequencies))
@@ -121,19 +121,19 @@ BinnedPacketDataType = Mapping[int | str, Sequence[int]]
 
 class AbstractPacketWatcher:
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def packets_by_agent(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def packets_by_station(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def packets_by_band(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
 
 PACKET_WATCHER = AbstractPacketWatcher()  # Must be overridden during app initialization

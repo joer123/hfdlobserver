@@ -79,7 +79,7 @@ class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
         pass
 
     async def run(self) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def on_task_done(self, task: asyncio.Task) -> None:
         exc = task.exception()
@@ -106,7 +106,7 @@ class Web888Receiver(LocalReceiver):
         self.setup_harnesses()
 
     def setup_harnesses(self) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError(str(self.__class__))
 
     def observable_widths(self) -> list[int]:
         return [12000]  # hardcoded to the value that kiwisdr uses.
