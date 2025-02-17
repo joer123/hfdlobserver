@@ -174,6 +174,8 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         else:
             if a.frequencies != base.frequencies:
                 logger.info(f'{base.station_id} has updated frequencies? {a.frequencies} to {base.frequencies}')
+                if not a.frequencies:
+                    a.frequencies = base.frequencies
             then = to_timestamp_or_none(base.valid_to)
             if a.valid_to != then:
                 logger.info(f'{base.station_id} has updated valid_to {a.valid_to} to {to_timestamp} ({base.valid_to})')

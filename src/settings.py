@@ -23,7 +23,6 @@ base_path: pathlib.Path = None  # type: ignore
 registry: dict[str, dict] = {
     'observer': {
         'conductor': {
-            'slot_width': 12,
             # ignored_frequencies is a list of frequencies to ignore in assigning receivers.
             # Each entry in the list can be a single frequency (kHz) or a pair of frequencies specifying a closed
             # interval (inclusive)
@@ -104,6 +103,13 @@ registry: dict[str, dict] = {
                     'config': 'default',
                 },
             },
+            'soapysdr': {
+                'type': 'DirectReceiver',
+                'decoder': {
+                    'type': 'SoapySDRDecoder',
+                    'config': 'soapy'
+                }
+            }
         },
         'decoder': {
             'default': {
@@ -113,6 +119,52 @@ registry: dict[str, dict] = {
                 'system_table': 'systable.conf',
                 'system_table_save': 'systable_updated.conf',
             },
+            'soapy': {
+                'quiet': True,
+                'decoder_path': 'dumphfdl',
+                'system_table': 'systable.conf',
+                'system_table_save': 'systable_updated.conf',
+                'shoulder': 0.8,
+            },
+            'rspdx': {
+                'quiet': True,
+                'decoder_path': 'dumphfdl',
+                'system_table': 'systable.conf',
+                'system_table_save': 'systable_updated.conf',
+                'soapysdr': {
+                    'driver': 'sdrplay',
+                    # 'serial': '1234567890'
+                },
+                'device-settings': {
+                    'rfnotch_ctrl': 'false',
+                    'dabnotch_ctrl': 'false',
+                    'agc_setpoint': -14,
+                    'biasT_ctrl': 'false',
+                    'rfgain_sel': 0,
+                },
+                'sample-rates': [[0, 8000000]],
+                'shoulder': 0.8,
+                # 'gain': ...,
+                # 'gain-elements': {
+                #     'elem': 'value',
+                #     'elem2': 'value2',
+                # },
+                # "freq-correction": 0.0,
+                # "freq-offset": 0.0,
+                "antenna": 'Antenna C',
+            },
+            'airspyhf': {
+                'quiet': True,
+                'decoder_path': 'dumphfdl',
+                'system_table': 'systable.conf',
+                'system_table_save': 'systable_updated.conf',
+                'shoulder': 0.8,
+                'soapysdr': {
+                    'driver': 'airspyhf'
+                },
+                'sample-rates': [912000, 768000, 650000, 456000, 384000, 228000, 192000],
+                'gain': 52,
+            }
         },
         'client': {
             'default': {
@@ -120,8 +172,7 @@ registry: dict[str, dict] = {
                 'settle_time': 1,
                 'quiet': False,
                 'username': 'kiwi_nc:hfdlobserver',
-                'channel_bandwidth': 12,
-                'max_channels': 13,
+                'channel_width': 12000,
                 'agc_files': {
                     '*': 'agc.yaml',
                     2: 'agc-02M.yaml',

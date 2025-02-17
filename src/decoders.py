@@ -122,6 +122,8 @@ class Dumphfdl(BaseDecoder):
         return cmd
 
     def valid_return_codes(self) -> list[int]:
+        # -6 : SIGABRT. "The futex facility returned an unexpected error code."
+        # -11 is speculative. Some weirdness on odroid
         return [0, -6, -11, -15]
 
 
@@ -167,8 +169,6 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
             self.execution_arguments(),
             on_prepare=self.on_prepare,
             on_running=self.on_execute,
-            # -6 : SIGABRT. "The futex facility returned an unexpected error code."
-            # -11 is speculative. Some weirdness on odroid
             valid_return_codes=self.valid_return_codes(),
         )
         return command
@@ -182,27 +182,43 @@ class DummyDecoder(IQDecoderProcess):
         return asyncio.get_running_loop().create_task(asyncio.sleep(0.1))
 
 
-class SoapySDRDecoder(Dumphfdl):
+class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
+    def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
+        Dumphfdl.__init__(self, name, config, listener)
+        hfdl_observer.process.ProcessHarness.__init__(self)
+        self.settle_time = config.get('settle_time', 0)
+
+    def create_command(self) -> DumphfdlCommand:
+        command = DumphfdlCommand(
+            self.logger,
+            self.commandline(),
+            self.execution_arguments(),
+            on_prepare=self.on_prepare,
+            on_running=self.on_execute,
+            valid_return_codes=self.valid_return_codes(),
+        )
+        return command
+
+    def commandline(self) -> list[str]:
+        return Dumphfdl.commandline(self)
+
+    def execution_arguments(self) -> dict:
+        return {}
+
+    def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
+        pass
+
+    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+        self.channel = channel
+        return self.start()
+
+
+class SoapySDRDecoder(DirectDecoder):
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         super().__init__(name, config, listener)
         self.sample_rates = sorted(util.normalize_ranges(config.get('sample-rates', [])))
 
     def listen_args(self) -> list[str]:
-        """
-            soapysdr:
-                driver: sdrplay
-                serial: 1234567890
-            device-settings:
-                ...: ...
-            # sample-rates: list of ranges or specific sample rates available.
-            gain: ...
-            gain-elements:
-                elem: value
-                elem2: value2
-            freq-correction: float
-            freq-offset: float
-            antenna: string
-        """
         def nested_args(incoming: dict | str) -> str:
             if isinstance(incoming, dict):
                 return ','.join(f'{k}={v}' for k, v in incoming.items())
@@ -229,4 +245,10 @@ class SoapySDRDecoder(Dumphfdl):
                 args.append(f'--{to_opt}')
                 args.append(opt_value)
         # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
+        sample_rate_needed = int(self.channel.width / float(self.config.get('shoulder', 1.0))) * 1000
+        for sample_rate in self.sample_rates:
+            if sample_rate_needed <= sample_rate[1]:
+                exact = sample_rate[0] != sample_rate[1]
+                args.append('--sample-rate')
+                args.append(str(sample_rate_needed if exact else sample_rate[1]))
         return args

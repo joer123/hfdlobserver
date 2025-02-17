@@ -16,7 +16,7 @@ import pathlib
 import sys
 
 from signal import SIGINT, SIGTERM
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import click
 
@@ -42,7 +42,6 @@ TRACEMALLOC = False
 class HFDLObserver(hfdl_observer.bus.Publisher):
     local_receivers: list[receivers.LocalReceiver]
     proxies: list[hfdl_observer.manage.ReceiverProxy]
-    parameters: hfdl_observer.data.ObserverParameters
     running: bool = True
 
     availability_watcher: orm.NetworkUpdater
@@ -58,7 +57,6 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         self.network_overview = hfdl_observer.manage.NetworkOverview(config['tracker'], self.network_updater)
         self.network_overview.subscribe('frequencies', self.on_frequencies)
         self.network_overview.subscribe('state', self.network_updater.prune)
-        # self.network_overview.subscribe('frequencies', self.ministats)
 
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
         self.hfdl_consumers = [
@@ -72,7 +70,6 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
             ),
         ]
         self.conductor = hfdl_observer.manage.SimpleConductor(config['conductor'])
-        self.parameters = self.conductor.parameters
 
         self.proxies = []
         self.local_receivers = []
@@ -82,7 +79,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
             receiver_config = settings.flatten(receiver_base, 'receiver')
             typename = receiver_config['type']
             klass = getattr(receivers, typename)
-            receiver = klass(rname, receiver_config, self.hfdl_listener.listener, self.parameters)
+            receiver = klass(rname, receiver_config, self.hfdl_listener.listener)
             self.add_receiver(receiver)
 
     def add_receiver(self, receiver: receivers.LocalReceiver) -> None:
@@ -127,10 +124,10 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         logger.error(f'Bailing due to error on receiver {receiver}: {error}')
         self.running = False
 
-    # def ministats(self, _: Any) -> None:
-    #     table = hfdl_observer.heat.by_frequency(60, 10)
-    #     for line in str(table).split('\n'):
-    #         logger.info(f'{line}')
+    def ministats(self, _: Any) -> None:
+        table = hfdl_observer.heat.TableByFrequency(60, 15)
+        for line in str(table).split('\n'):
+            logger.info(f'{line}')
 
     def start(self) -> None:
         self.packet_watcher.prune_every(60)
@@ -201,7 +198,7 @@ def observe(
         on_observer(observer, cumulative)
     else:
         # initialize headless
-        pass
+        observer.network_overview.subscribe('state', observer.ministats)
 
     main_task = asyncio.ensure_future(async_observe(observer))
     for signal in [SIGINT, SIGTERM]:

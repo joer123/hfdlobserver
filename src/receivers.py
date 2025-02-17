@@ -15,8 +15,10 @@ from typing import Any
 
 import hfdl_observer
 import hfdl_observer.bus
+import hfdl_observer.data as data
 import hfdl_observer.manage
 import hfdl_observer.process
+import hfdl_observer.util as util
 
 import decoders
 import iqsources
@@ -29,24 +31,18 @@ class ReceiverError(Exception):
     pass
 
 
-class LocalReceiver(hfdl_observer.bus.Publisher):
+class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
     frequencies: list[int]
-
     name: str
+    tasks: list[asyncio.Task]
 
-    def __init__(
-        self,
-        name: str,
-        config: collections.abc.MutableMapping,
-        listener: hfdl_observer.data.ListenerConfig,
-        parameters: hfdl_observer.data.ObserverParameters
-    ) -> None:
+    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
         self.config = config
         self.name = name
         self.logger = logger.getChild(self.name)
         self.listener = listener
-        self.parameters = parameters
         self.frequencies = []
+        self.tasks = []
         super().__init__()
 
     def on_remote_event(self, _: Any) -> None:
@@ -54,51 +50,29 @@ class LocalReceiver(hfdl_observer.bus.Publisher):
 
     @functools.cached_property
     def proxy(self) -> hfdl_observer.manage.ReceiverProxy:
-        _proxy = hfdl_observer.manage.ReceiverProxy(self.name, self.parameters.max_sample_rate, self)
+        _proxy = hfdl_observer.manage.ReceiverProxy(self.name, self.observable_widths(), self)
         _proxy.subscribe(f'receiver:{self.name}', self.on_remote_event)
         # a bit presumptuous.
         self.subscribe(f'receiver:{self.name}', _proxy.on_remote_event)
         return _proxy
 
-    def kill(self) -> None:
-        pass
-
-
-class Web888Receiver(LocalReceiver):
-    tasks: list[asyncio.Task]
-    shell: bool = False
-
-    def __init__(
-        self,
-        name: str,
-        config: collections.abc.MutableMapping,
-        listener: hfdl_observer.data.ListenerConfig,
-        parameters: hfdl_observer.data.ObserverParameters
-    ) -> None:
-        super().__init__(name, config, listener, parameters)
-        self.tasks = []
-        self.setup_harnesses()
-
-    def setup_harnesses(self) -> None:
-        raise NotImplementedError()
-
     def covers(self, freqs: list[int]) -> bool:
         # in this implementation it must be exact.
         return freqs == self.frequencies
+
+    def kill(self) -> None:
+        pass
 
     def listen(self, frequencies: list[int]) -> None:
         self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
         self.stop()
         self.frequencies = frequencies
-        self.channel = self.parameters.channel(frequencies)
+        self.channel = self.observing_channel_for(frequencies)
         self.start()
         self.logger.debug(f'switched to {frequencies}')
-
         # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
     def start(self) -> None:
-        # if self.tasks:
-        #     raise ReceiverError('previous tasks still running')
         self.task = asyncio.get_running_loop().create_task(self.run())
 
     def stop(self) -> None:
@@ -106,6 +80,36 @@ class Web888Receiver(LocalReceiver):
 
     async def run(self) -> None:
         raise NotImplementedError()
+
+    def on_task_done(self, task: asyncio.Task) -> None:
+        exc = task.exception()
+        if exc:
+            self.publish('fatal', (str(self), str(exc)))
+        if task in self.tasks:
+            # we have not been asked to stop or kill, so this task has ended prematurely.
+            self.tasks.remove(task)
+            if not self.tasks:
+                # there are no more tasks, so there's no valid channel
+                self.frequencies = []
+                self.channel = self.observing_channel_for([])
+                self.publish(f'receiver:{self.name}', ('listening', self.frequencies))
+
+    def __str__(self) -> str:
+        return f'({self.__class__.__name__}) {self.name} on {self.frequencies}'
+
+
+class Web888Receiver(LocalReceiver):
+    shell: bool = False
+
+    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
+        super().__init__(name, config, listener)
+        self.setup_harnesses()
+
+    def setup_harnesses(self) -> None:
+        raise NotImplementedError()
+
+    def observable_widths(self) -> list[int]:
+        return [12000]  # hardcoded to the value that kiwisdr uses.
 
     def on_remote_event(self, event: tuple[str, Any]) -> None:
         action, arg = event
@@ -116,9 +120,6 @@ class Web888Receiver(LocalReceiver):
         elif action == 'die':
             logger.warning(f'{self} received DIE order')
             # self.kill()
-
-    def __str__(self) -> str:
-        return f'({self.__class__.__name__}) {self.name} on {self.frequencies}'
 
 
 class DummyReceiver(Web888Receiver):
@@ -138,19 +139,6 @@ class Web888ExecReceiver(Web888Receiver):
     def setup_harnesses(self) -> None:
         self.client = iqsources.KiwiClientProcess(self.name, self.config.get('client', {}))
         self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
-
-    def on_task_done(self, task: asyncio.Task) -> None:
-        exc = task.exception()
-        if exc:
-            self.publish('fatal', (str(self), str(exc)))
-        if task in self.tasks:
-            # we have not been asked to stop or kill, so this task has ended prematurely.
-            self.tasks.remove(task)
-            if not self.tasks:
-                # there are no more tasks, so there's no valid channel
-                self.frequencies = []
-                self.channel = self.parameters.channel([])
-                self.publish(f'receiver:{self.name}', ('listening', self.frequencies))
 
     async def run(self) -> None:
         self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
@@ -215,4 +203,33 @@ class ReceiverPipe(hfdl_observer.process.ProcessHarness):
 
 
 class DirectReceiver(LocalReceiver):
-    pass
+    observable_channel_widths: list[int]
+    decoder: decoders.DirectDecoder
+
+    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
+        super().__init__(name, config, listener)
+        shoulder = float(self.config.get('shoulder', 1.0))
+        sample_rates = util.normalize_ranges(self.config.get('sample-rates', []))
+        self.observable_channel_widths = [int(hi * shoulder) for lo, hi in sample_rates]
+        decoder_type = self.config['decoder']['type']
+        decoder_class = getattr(decoders, decoder_type)
+        self.decoder = decoder_class(self.name, self.config.get('decoder', {}), self.listener)
+        if not isinstance(self.decoder, decoders.DirectDecoder):
+            raise ValueError(f'{self.decoder} is not an expected Decoder')
+
+    async def run(self) -> None:
+        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
+        await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
+        decoder_task = self.decoder.listen(self.channel)
+        self.tasks.append(decoder_task)
+        decoder_task.add_done_callback(self.on_task_done)
+
+    def stop(self) -> None:
+        self.logger.debug('Stopping')
+        self.tasks = []  # don't care about these tasks anymore
+        self.decoder.stop()
+
+    def kill(self) -> None:
+        self.logger.debug('Killing')
+        self.tasks = []  # don't care about these tasks anymore
+        self.decoder.kill()

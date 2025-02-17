@@ -69,7 +69,23 @@ class ObservingChannel:
         return f'ObservingChannel({self.allowed_width}, {self.frequencies})'
 
 
-class ObserverParameters:
+class ChannelObserver:
+    def observable_widths(self) -> list[int]:
+        raise NotImplementedError()
+
+    def width_for(self, frequencies: list[int]) -> int:
+        needed = max(hfdl.HFDL_CHANNEL_WIDTH, max(frequencies) - min(frequencies))
+        widths = sorted(self.observable_widths(), reverse=True)
+        for available_width in widths:
+            if needed <= available_width:
+                return available_width
+        raise ValueError(f'cannot accomodate {frequencies} in channel widths {widths}')
+
+    def observing_channel_for(self, frequencies: list[int]) -> ObservingChannel:
+        return ObservingChannel(self.width_for(frequencies), frequencies)
+
+
+class DeprecatedObserverParameters:
     max_sample_rate: int
     num_clients: int
 

@@ -15,7 +15,7 @@ from typing import Any, Callable, Coroutine, Optional
 
 import hfdl_observer.bus
 import hfdl_observer.env
-import hfdl_observer.data
+import hfdl_observer.data as data
 import hfdl_observer.hfdl
 import hfdl_observer.network
 import hfdl_observer.util as util
@@ -102,25 +102,25 @@ class NetworkOverview(hfdl_observer.bus.Publisher):
                 }
                 out.append(sd)
 
-            data: dict = {
+            payload: dict = {
                 'ground_stations': out
             }
-            if data != self.last_state:
+            if payload != self.last_state:
                 logger.info('saving station data')
-                self.last_state = data.copy()
-                data['when'] = when
-                self.save_path.write_text(json.dumps(data, indent=4) + '\n')
-            self.publish('state', data)  # maybe should be a deepcopy
+                self.last_state = payload.copy()
+                payload['when'] = when
+                self.save_path.write_text(json.dumps(payload, indent=4) + '\n')
+            self.publish('state', payload)  # maybe should be a deepcopy
 
 
-class ReceiverProxy(hfdl_observer.bus.Publisher):
+class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
     name: str
-    channel: Optional[hfdl_observer.data.ObservingChannel]
+    channel: Optional[data.ObservingChannel]
 
-    def __init__(self, name: str, sample_rate: int, other: hfdl_observer.bus.Publisher):
+    def __init__(self, name: str, observable_widths: list[int], other: hfdl_observer.bus.Publisher):
         super().__init__()
         self.name = name
-        self.sample_rate = sample_rate
+        self.observable_channel_widths = observable_widths
         self.channel = None
         other.subscribe(f'receiver:{self.name}', self.on_remote_event)
 
@@ -130,25 +130,22 @@ class ReceiverProxy(hfdl_observer.bus.Publisher):
     def send(self, *params: Any) -> None:
         self.publish(f'receiver:{self.name}', tuple(params))
 
-    def covers(self, channel: hfdl_observer.data.ObservingChannel) -> bool:
+    def covers(self, channel: data.ObservingChannel) -> bool:
         for x in channel.frequencies:
             if not self.channel or x not in self.channel.frequencies:
                 return False
         return True
-        # return all(x in self.frequencies for x in channel.frequencies)
 
-    def on_local_event(self, data: tuple[str, Any]) -> None:
-        action, arg = data
+    def on_local_event(self, payload: tuple[str, Any]) -> None:
+        action, arg = payload
         if action == 'listen':
-            self.send(data)
-            # self.publish(f'receiver:{self.name}', data)
+            self.send(payload)
 
-    def on_remote_event(self, data: tuple[str, Any]) -> None:
-        action, arg = data
+    def on_remote_event(self, payload: tuple[str, Any]) -> None:
+        action, arg = payload
         if action == 'listening':
-            self.channel = hfdl_observer.data.ObservingChannel(self.sample_rate, arg)
+            self.channel = self.observing_channel_for(arg)
             logger.debug(f'{self} updated from remote')
-            # self.publish(f'receiver:{name}', data)
 
     def __str__(self) -> str:
         return f'{self.name} on {self.channel}'
@@ -159,11 +156,13 @@ class ReceiverProxy(hfdl_observer.bus.Publisher):
     def listen(self, freqs: list[int]) -> None:
         self.send('listen', freqs)
 
+    def observable_widths(self) -> list[int]:
+        return self.observable_channel_widths
 
-class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
+
+class SimpleConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):  # proxyPublisher
     ranked_station_ids: list[int]
     ignored_frequencies: list[tuple[int, int]]
-    allowed_channel_width: int
     proxies: list[ReceiverProxy]
 
     def __init__(self, config: dict) -> None:
@@ -176,13 +175,6 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
         self.reaper = Reaper()
         self.reaper.subscribe('dead-receiver', self.on_dead_receiver)
 
-    @property
-    def parameters(self) -> hfdl_observer.data.ObserverParameters:
-        params = hfdl_observer.data.ObserverParameters()
-        params.max_sample_rate = self.config['slot_width']
-        # params.num_clients = self.config['max_slots']
-        return params
-
     def add_receiver(self, receiver: ReceiverProxy) -> None:
         self.proxies.append(receiver)
 
@@ -192,12 +184,22 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                 return True
         return False
 
+    def observable_widths(self) -> list[int]:
+        widths: set[int] = set()
+        for proxy in self.proxies:
+            proxy_widths = set(proxy.observable_widths())
+            if not widths:
+                widths = proxy_widths
+            elif widths != proxy_widths:
+                raise ValueError('only uniform channel widths is currently supported')
+        return list(widths)
+
     def channels(
         self,
         station_frequencies: dict[int, list[int]],
-        original_channels: Optional[list[hfdl_observer.data.ObservingChannel]] = None,
-    ) -> list[hfdl_observer.data.ObservingChannel]:
-        channels: list[hfdl_observer.data.ObservingChannel] = [c.clone() for c in original_channels or []]
+        original_channels: Optional[list[data.ObservingChannel]] = None,
+    ) -> list[data.ObservingChannel]:
+        channels: list[data.ObservingChannel] = [c.clone() for c in original_channels or []]
         for sid in self.ranked_station_ids:
             for frequency in sorted(station_frequencies.get(sid, [])):
                 if self.is_ignored(frequency):
@@ -206,13 +208,13 @@ class SimpleConductor(hfdl_observer.bus.Publisher):  # proxyPublisher
                     if channel.maybe_add(frequency):
                         break
                 else:
-                    channels.append(self.parameters.channel([frequency]))
+                    channels.append(self.observing_channel_for([frequency]))
         return channels
 
     def orchestrate(
         self,
-        channels: list[hfdl_observer.data.ObservingChannel]
-    ) -> list[hfdl_observer.data.ObservingChannel]:
+        channels: list[data.ObservingChannel]
+    ) -> list[data.ObservingChannel]:
         possible_frequencies = list(itertools.chain(*[c.frequencies for c in channels]))
         active_frequencies = [f for f in possible_frequencies if hfdl_observer.network.STATIONS.is_active(f)]
         if not self.proxies:
@@ -280,7 +282,7 @@ REAPER_HORIZON = 3600
 
 
 class Reaper(hfdl_observer.bus.Publisher):
-    channels: dict[int, hfdl_observer.data.ObservingChannel]
+    channels: dict[int, data.ObservingChannel]
     last_seen: dict[int, int]
 
     def __init__(self) -> None:
@@ -303,12 +305,12 @@ class Reaper(hfdl_observer.bus.Publisher):
         frequency = packet.frequency
         self.last_seen[frequency] = max(packet.timestamp, self.last_seen.get(frequency, 0))
 
-    def add_channel(self, channel: hfdl_observer.data.ObservingChannel) -> None:
+    def add_channel(self, channel: data.ObservingChannel) -> None:
         logger.debug(f'reaper adding channel {channel}')
         for freq in channel.frequencies:
             self.channels[freq] = channel
 
-    def remove_channel(self, channel: hfdl_observer.data.ObservingChannel) -> None:
+    def remove_channel(self, channel: data.ObservingChannel) -> None:
         logger.debug(f'reaper removing channel {channel}')
         for freq in channel.frequencies:
             if freq in self.channels:
