@@ -59,6 +59,16 @@ class ObservingChannel:
             return True
         return False
 
+    def maybe_add_all(self, frequencies: list[int]) -> bool:
+        # all or nothing.
+        peephole_width = self.allowed_width - hfdl.HFDL_CHANNEL_WIDTH
+        if not self._frequencies or (
+            abs(min(frequencies) - self.min) <= peephole_width and abs(max(frequencies) - self.max) <= peephole_width
+        ):
+            self._frequencies |= set(frequencies)
+            return True
+        return False
+
     def clone(self) -> 'ObservingChannel':
         return ObservingChannel(self.allowed_width, self.frequencies)
 

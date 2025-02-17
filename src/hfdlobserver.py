@@ -69,7 +69,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
                 [self.on_hfdl, self.packet_watcher.on_hfdl],
             ),
         ]
-        self.conductor = hfdl_observer.manage.UniformConductor(config['conductor'])
+        self.conductor = hfdl_observer.manage.DiverseConductor(config['conductor'])
 
         self.proxies = []
         self.local_receivers = []
@@ -91,11 +91,8 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         self.conductor.add_receiver(proxy)
 
     def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
-        channels = self.conductor.channels(targetted_freqs)
-        channels = self.conductor.channels(network.STATIONS.assigned(), channels)
-        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
+        chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
 
-        chosen_channels = self.conductor.orchestrate(channels)
         targetted = []
         untargetted = []
         for channel in chosen_channels:
@@ -105,6 +102,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
                 else:
                     untargetted.append(frequency)
 
+        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
         self.publish('orchestrated', {
             'targetted': targetted,
             'untargetted': untargetted,
