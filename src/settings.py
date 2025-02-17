@@ -7,6 +7,7 @@
 import collections
 import collections.abc
 import json
+import logging
 import os
 import os.path
 import pathlib
@@ -126,7 +127,26 @@ registry: dict[str, dict] = {
                 'system_table_save': 'systable_updated.conf',
                 'shoulder': 0.8,
             },
-            'rspdx': {
+            'rspdx+miri': {
+                'quiet': True,
+                'decoder_path': 'dumphfdl',
+                'system_table': 'systable.conf',
+                'system_table_save': 'systable_updated.conf',
+                'soapysdr': {
+                    'driver': 'soapyMiri',
+                    'bufflen': '65536',
+                    'buffers': '64',
+                    'asyncBuffs': '32',
+                },
+                'device-settings': {
+                    'flavour': 'SDRplay',
+                    'biastee': 'false',
+                },
+                'sample-rates': [1300000, 1536000, 2048000, 4000000],  # , 7, 8, 9, 10, 12
+                'shoulder': 0.8,
+                # "antenna": 'Antenna C',  # Ignored
+            },
+            'rspdx+sdrplay': {
                 'quiet': True,
                 'decoder_path': 'dumphfdl',
                 'system_table': 'systable.conf',
@@ -142,7 +162,8 @@ registry: dict[str, dict] = {
                     'biasT_ctrl': 'false',
                     'rfgain_sel': 0,
                 },
-                'sample-rates': [[0, 8000000]],
+                # 'sample-rates': [[0, 2000000]],
+                'sample-rates': [1300000, 1536000, 2048000, 4000000],  # , 7, 8, 9, 10, 12
                 'shoulder': 0.8,
                 # 'gain': ...,
                 # 'gain-elements': {
@@ -227,11 +248,14 @@ def flatten(settings: collections.abc.MutableMapping, kind: str) -> collections.
         return settings
 
     default_settings = configs[kind][default_config]
+
     for key, value in settings.items():
+        if isinstance(value, collections.abc.MutableMapping):
+            for flatkey, flatval in flatten(value, key).items():
+                result[key].setdefault(flatkey, flatval)
         if key in default_settings:
-            result[key].update(flatten(default_settings[key], key))
-        elif isinstance(value, collections.abc.MutableMapping):
-            result[key].update(flatten(value, key))
+            for flatkey, flatval in flatten(default_settings[key], key).items():
+                result[key].setdefault(flatkey, flatval)
     for key, value in default_settings.items():
         if isinstance(value, collections.abc.MutableMapping):
             value = flatten(value, key)

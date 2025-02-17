@@ -24,6 +24,9 @@ import hfdl_observer.util as util
 logger = logging.getLogger(__name__)
 
 
+REAPER_HORIZON = 3600
+
+
 class NetworkOverview(hfdl_observer.bus.Publisher):
     last_state: dict
     startables: list[Callable[[], Coroutine[Any, Any, None]]]
@@ -160,7 +163,7 @@ class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
         return self.observable_channel_widths
 
 
-class SimpleConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):  # proxyPublisher
+class AbstractConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):
     ranked_station_ids: list[int]
     ignored_frequencies: list[tuple[int, int]]
     proxies: list[ReceiverProxy]
@@ -184,6 +187,16 @@ class SimpleConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):  # pro
                 return True
         return False
 
+    def observable_widths(self) -> list[int]:
+        raise NotImplementedError(str(self.__class__))
+
+    def on_dead_receiver(self, frequencies: list[int]) -> None:
+        for receiver in self.proxies:
+            if receiver.channel and receiver.channel.frequencies == frequencies:
+                receiver.die()
+
+
+class UniformConductor(AbstractConductor):
     def observable_widths(self) -> list[int]:
         widths: set[int] = set()
         for proxy in self.proxies:
@@ -272,13 +285,9 @@ class SimpleConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):  # pro
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
         return chosen_channels
 
-    def on_dead_receiver(self, frequencies: list[int]) -> None:
-        for receiver in self.proxies:
-            if receiver.channel and receiver.channel.frequencies == frequencies:
-                receiver.die()
 
-
-REAPER_HORIZON = 3600
+class DiverseConductor(AbstractConductor):
+    pass
 
 
 class Reaper(hfdl_observer.bus.Publisher):

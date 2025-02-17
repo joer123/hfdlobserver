@@ -67,7 +67,9 @@ class ColumnHeader:
         self.label = str(index)
 
     def __str__(self) -> str:
-        return f'{self.label} @ {self.offset}'
+        if self.offset:
+            return f'{self.label}@{self.offset}'
+        return 'NOW'
 
 
 class Cell(Taggable):
@@ -134,7 +136,7 @@ class Table:
 
     def __str__(self) -> str:
         out = []
-        out.append('\t\t' + '\t'.join(str(header) for header in self.column_headers))
+        out.append('\t' + '\t'.join(str(header) for header in self.column_headers))
         for k, cells in self.bins.items():
             cells_text = "\t".join(str(cell) for cell in cells)
             out.append('\t'.join([str(self.row_headers[k]), cells_text]))

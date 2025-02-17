@@ -200,7 +200,9 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
         return command
 
     def commandline(self) -> list[str]:
-        return Dumphfdl.commandline(self)
+        s = Dumphfdl.commandline(self)
+        logger.info(f'{s}')
+        return s
 
     def execution_arguments(self) -> dict:
         return {}
@@ -209,8 +211,12 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
         pass
 
     def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+        logger.info(f'asked to listen to {channel!r}')
         self.channel = channel
         return self.start()
+
+    def observable_channel_widths(self) -> list[int]:
+        raise NotImplementedError(str(self.__class__))
 
 
 class SoapySDRDecoder(DirectDecoder):
@@ -228,11 +234,11 @@ class SoapySDRDecoder(DirectDecoder):
         arg_map = [
             ('gain', 'gain', None),
             ('antenna', 'antenna', None),
-            ('freq_offset', 'freq-offset', None),
-            ('freq_correction', 'freq-correction', None),
+            ('freq-offset', 'freq-offset', None),
+            ('freq-correction', 'freq-correction', None),
             ('soapysdr', 'soapysdr', nested_args),
-            ('gain_elements', 'gain-elements', nested_args),
-            ('device_settings', 'device-settings', nested_args),
+            ('gain-elements', 'gain-elements', nested_args),
+            ('device-settings', 'device-settings', nested_args),
         ]
         for from_opt, to_opt, normalizer in arg_map:
             value = self.config.get(from_opt, None)
@@ -246,9 +252,17 @@ class SoapySDRDecoder(DirectDecoder):
                 args.append(opt_value)
         # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
         sample_rate_needed = int(self.channel.width / float(self.config.get('shoulder', 1.0))) * 1000
+        logger.info(f'SAMPLE RATE NEEDED {sample_rate_needed}')
         for sample_rate in self.sample_rates:
             if sample_rate_needed <= sample_rate[1]:
                 exact = sample_rate[0] != sample_rate[1]
                 args.append('--sample-rate')
                 args.append(str(sample_rate_needed if exact else sample_rate[1]))
+                break
+        else:
+            raise ValueError(f'cannot find an acceptable sample rate for needed width {sample_rate_needed}')
         return args
+
+    def observable_channel_widths(self) -> list[int]:
+        shoulder = self.config.get('shoulder', 1.0)
+        return [int((hi * shoulder) / 1000) for lo, hi in self.sample_rates]

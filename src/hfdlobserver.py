@@ -69,7 +69,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
                 [self.on_hfdl, self.packet_watcher.on_hfdl],
             ),
         ]
-        self.conductor = hfdl_observer.manage.SimpleConductor(config['conductor'])
+        self.conductor = hfdl_observer.manage.UniformConductor(config['conductor'])
 
         self.proxies = []
         self.local_receivers = []
@@ -125,7 +125,7 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         self.running = False
 
     def ministats(self, _: Any) -> None:
-        table = hfdl_observer.heat.TableByFrequency(60, 15)
+        table = hfdl_observer.heat.TableByFrequency(60, 10)
         for line in str(table).split('\n'):
             logger.info(f'{line}')
 

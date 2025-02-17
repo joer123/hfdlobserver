@@ -18,7 +18,6 @@ import hfdl_observer.bus
 import hfdl_observer.data as data
 import hfdl_observer.manage
 import hfdl_observer.process
-import hfdl_observer.util as util
 
 import decoders
 import iqsources
@@ -45,8 +44,15 @@ class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
         self.tasks = []
         super().__init__()
 
-    def on_remote_event(self, _: Any) -> None:
-        pass
+    def on_remote_event(self, event: tuple[str, Any]) -> None:
+        action, arg = event
+        if action == 'listen':
+            self.listen(arg)
+        elif action == 'ping':
+            self.publish(f'receiver:{self.name}', ('pong', None))
+        elif action == 'die':
+            logger.warning(f'{self} received DIE order')
+            # self.kill()
 
     @functools.cached_property
     def proxy(self) -> hfdl_observer.manage.ReceiverProxy:
@@ -110,16 +116,6 @@ class Web888Receiver(LocalReceiver):
 
     def observable_widths(self) -> list[int]:
         return [12000]  # hardcoded to the value that kiwisdr uses.
-
-    def on_remote_event(self, event: tuple[str, Any]) -> None:
-        action, arg = event
-        if action == 'listen':
-            self.listen(arg)
-        elif action == 'ping':
-            self.publish(f'receiver:{self.name}', ('pong', None))
-        elif action == 'die':
-            logger.warning(f'{self} received DIE order')
-            # self.kill()
 
 
 class DummyReceiver(Web888Receiver):
@@ -208,14 +204,13 @@ class DirectReceiver(LocalReceiver):
 
     def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
         super().__init__(name, config, listener)
-        shoulder = float(self.config.get('shoulder', 1.0))
-        sample_rates = util.normalize_ranges(self.config.get('sample-rates', []))
-        self.observable_channel_widths = [int(hi * shoulder) for lo, hi in sample_rates]
         decoder_type = self.config['decoder']['type']
         decoder_class = getattr(decoders, decoder_type)
         self.decoder = decoder_class(self.name, self.config.get('decoder', {}), self.listener)
         if not isinstance(self.decoder, decoders.DirectDecoder):
             raise ValueError(f'{self.decoder} is not an expected Decoder')
+        self.observable_channel_widths = self.decoder.observable_channel_widths()
+        logger.info(f'observable channel widths {self.observable_channel_widths}')
 
     async def run(self) -> None:
         self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
@@ -233,3 +228,6 @@ class DirectReceiver(LocalReceiver):
         self.logger.debug('Killing')
         self.tasks = []  # don't care about these tasks anymore
         self.decoder.kill()
+
+    def observable_widths(self) -> list[int]:
+        return self.observable_channel_widths
