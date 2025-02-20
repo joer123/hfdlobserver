@@ -134,10 +134,7 @@ class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
         self.publish(f'receiver:{self.name}', tuple(params))
 
     def covers(self, channel: data.ObservingChannel) -> bool:
-        for x in channel.frequencies:
-            if not self.channel or x not in self.channel.frequencies:
-                return False
-        return True
+        return self.channel is not None and self.channel.covers(channel)
 
     def on_local_event(self, payload: tuple[str, Any]) -> None:
         action, arg = payload
@@ -207,7 +204,7 @@ class UniformConductor(AbstractConductor):
                 raise ValueError('only uniform channel widths is currently supported')
         return list(widths)
 
-    def channels(
+    def pick_channels(
         self,
         station_frequencies: dict[int, list[int]],
         original_channels: Optional[list[data.ObservingChannel]] = None,
@@ -224,15 +221,7 @@ class UniformConductor(AbstractConductor):
                     channels.append(self.observing_channel_for([frequency]))
         return channels
 
-    def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
-        if not self.proxies:
-            return []
-        channels = self.channels(targetted)
-        if fill_assigned:
-            channels = self.channels(network.STATIONS.assigned(), channels)
-        return self.orchestrate_channels(channels)
-
-    def orchestrate_channels(self, channels: list[data.ObservingChannel]) -> list[data.ObservingChannel]:
+    def merge_channels(self, channels: list[data.ObservingChannel]) -> list[data.ObservingChannel]:
         if not self.proxies:
             return []
 
@@ -244,43 +233,12 @@ class UniformConductor(AbstractConductor):
             logger.debug(f'considering {channel}')
             for frequency in channel.frequencies:
                 station = network.STATIONS[frequency]
-                # this calculation is a bit premature, but should be okay. Could also be done for keeps and starts
-                # separately.
                 chosen_frequencies.append(frequency)
                 if station.is_assigned(frequency):
                     if station.is_active(frequency):
                         targetted_frequencies.append(frequency)
                     else:
                         untargetted_frequencies.append(frequency)
-
-        self.allocate_channels(chosen_channels)
-
-        #     for receiver in self.proxies:
-        #         if receiver.covers(channel):
-        #             keeps[receiver.name] = channel
-        #             break
-        #     else:
-        #         logger.debug(f'adding {channel} to starts')
-        #         starts.append(channel)
-
-        # available = []
-        # for receiver in self.proxies:
-        #     if receiver.name in keeps:
-        #         channel = keeps[receiver.name]
-        #         logger.debug(f'keeping {receiver}')
-        #     else:
-        #         logger.debug(f'marking {receiver} available')
-        #         available.append(receiver)
-
-        # for channel, receiver in zip(starts, available, strict=False):
-        #     if receiver.channel:
-        #         self.reaper.remove_channel(receiver.channel)
-        #         receiver_freqs = receiver.channel.frequencies
-        #     else:
-        #         receiver_freqs = []
-        #     receiver.listen(channel.frequencies)
-        #     logger.info(f'assigned {channel.frequencies} to {receiver.name} (was {receiver_freqs})')
-        #     self.reaper.add_channel(channel)
 
         targetted_count = len(targetted_frequencies)
         untargetted_count = len(untargetted_frequencies)
@@ -290,9 +248,9 @@ class UniformConductor(AbstractConductor):
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
         return chosen_channels
 
-    def allocate_channels(self, channels: list[data.ObservingChannel]) -> None:
+    def assign_channels(self, channels: list[data.ObservingChannel]) -> None:
         keeps = {}
-        starts = []
+        starts: list[data.ObservingChannel] = []
         proxies_by_width = sorted(self.proxies, key=lambda p: max(p.observable_widths()), reverse=True)
         for channel in channels:
             for receiver in proxies_by_width:
@@ -312,15 +270,36 @@ class UniformConductor(AbstractConductor):
                 logger.debug(f'marking {receiver} available')
                 available.append(receiver)
 
-        for channel, receiver in zip(starts, available, strict=False):
-            if receiver.channel:
-                self.reaper.remove_channel(receiver.channel)
-                receiver_freqs = receiver.channel.frequencies
+        available.sort(key=lambda a: max(a.observable_widths()))
+        for channel in starts:
+            for receiver in available:
+                if max(receiver.observable_widths()) >= channel.width:
+                    if receiver.channel:
+                        self.reaper.remove_channel(receiver.channel)
+                        receiver_freqs = receiver.channel.frequencies
+                    else:
+                        receiver_freqs = []
+                    receiver.listen(channel.frequencies)
+                    logger.info(f'assigned {channel.frequencies} to {receiver.name} (was {receiver_freqs})')
+                    self.reaper.add_channel(channel)
+                    available.remove(receiver)
+                    break
             else:
-                receiver_freqs = []
-            receiver.listen(channel.frequencies)
-            logger.info(f'assigned {channel.frequencies} to {receiver.name} (was {receiver_freqs})')
-            self.reaper.add_channel(channel)
+                logger.warning(f'cannot allocate a receiver for {channel}')
+                logger.info(f'channels\n{"\n".join(repr(c) for c in channels)}')
+                logger.info(f'available left\n{"\n".join(str(a) for a in available)}')
+                logger.info(f'keeps\n{"\n".join(str(a) for a in keeps.values())}')
+                logger.info(f'starts\n{"\n".join(str(s) for s in starts)}')
+
+    def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
+        if not self.proxies:
+            return []
+        channels = self.pick_channels(targetted)
+        if fill_assigned:
+            channels = self.pick_channels(network.STATIONS.assigned(), channels)
+        actual_channels = self.merge_channels(channels)
+        self.assign_channels(actual_channels)
+        return actual_channels
 
 
 class DiverseConductor(UniformConductor):
@@ -336,7 +315,7 @@ class DiverseConductor(UniformConductor):
             raise ValueError('conductor has no observable channel widths')
         return [width]
 
-    def orchestrate_channels(self, channels: list[data.ObservingChannel]) -> list[data.ObservingChannel]:
+    def merge_channels(self, channels: list[data.ObservingChannel]) -> list[data.ObservingChannel]:
         if not self.proxies:
             return []
         targetted = []
@@ -348,7 +327,7 @@ class DiverseConductor(UniformConductor):
         for proxy in self.proxies:
             actual_channels.append(data.ObservingChannel(max(proxy.observable_widths()), []))
 
-        actual_channels.sort(key=lambda e: e.allowed_width)
+        actual_channels.sort(key=lambda e: e.allowed_width, reverse=True)
 
         # merge the atomic channels into the possible proxy channels.
         for channel in channels:
@@ -360,14 +339,13 @@ class DiverseConductor(UniformConductor):
             else:
                 logger.debug(f'no proxy channel for {channel}, ignoring')
 
-        self.allocate_channels(actual_channels)
-
         targetted_count = len(targetted)
         untargetted_count = len(untargetted)
-        possible_frequencies = list(itertools.chain(*[c.frequencies for c in actual_channels]))
-        active_count = len([f for f in possible_frequencies if network.STATIONS.is_active(f)])
+        assigned = set(itertools.chain.from_iterable(network.STATIONS.assigned().values()))
+        active_count = len([f for f in assigned if network.STATIONS.is_active(f)])
         extra = untargetted_count
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
+        # logger.info(f'actual channels\n{"\n".join(repr(c) for c in actual_channels)}')
 
         return actual_channels
 

@@ -7,7 +7,6 @@
 import collections
 import collections.abc
 import json
-import logging
 import os
 import os.path
 import pathlib
@@ -127,7 +126,7 @@ registry: dict[str, dict] = {
                 'system_table_save': 'systable_updated.conf',
                 'shoulder': 0.8,
             },
-            'rspdx+miri': {
+            'rsp1+miri': {  # conjectural, miri does not support RSPdx
                 'quiet': True,
                 'decoder_path': 'dumphfdl',
                 'system_table': 'systable.conf',
@@ -142,12 +141,12 @@ registry: dict[str, dict] = {
                     'flavour': 'SDRplay',
                     'biastee': 'false',
                 },
-                'sample-rates': [1300000, 1536000, 2048000, 4000000],  # , 7, 8, 9, 10, 12
+                'sample-rates': [1300000, 1536000, 2048000, 4000000],
                 'shoulder': 0.8,
-                # "antenna": 'Antenna C',  # Ignored
             },
             'rspdx+sdrplay': {
                 'quiet': True,
+                'settle_time': 10,
                 'decoder_path': 'dumphfdl',
                 'system_table': 'systable.conf',
                 'system_table_save': 'systable_updated.conf',
@@ -162,8 +161,7 @@ registry: dict[str, dict] = {
                     'biasT_ctrl': 'false',
                     'rfgain_sel': 0,
                 },
-                # 'sample-rates': [[0, 2000000]],
-                'sample-rates': [1300000, 1536000, 2048000, 4000000],  # , 7, 8, 9, 10, 12
+                'sample-rates': [1300000, 1536000, 2048000, [2000000, 5000000]],
                 'shoulder': 0.8,
                 # 'gain': ...,
                 # 'gain-elements': {
@@ -172,10 +170,11 @@ registry: dict[str, dict] = {
                 # },
                 # "freq-correction": 0.0,
                 # "freq-offset": 0.0,
-                "antenna": 'Antenna C',
+                "antenna": 'Antenna B',
             },
             'airspyhf': {
                 'quiet': True,
+                'settle_time': 1,
                 'decoder_path': 'dumphfdl',
                 'system_table': 'systable.conf',
                 'system_table_save': 'systable_updated.conf',
@@ -210,7 +209,7 @@ registry: dict[str, dict] = {
                     17: 'agc-17M.yaml',
                     21: 'agc-21M.yaml',
                 }
-            }
+            },
         },
     },
 }

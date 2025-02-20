@@ -10,7 +10,7 @@ import functools
 import datetime
 import logging
 
-from typing import Any, Generic, Callable, Iterator, Optional, Sequence, TypeVar, Union
+from typing import Any, Generic, Callable, Iterable, Optional, Sequence, TypeVar, Union
 
 import rich.console
 import rich.highlighter
@@ -169,30 +169,31 @@ class ObserverDisplay:
                 "strong": "black on dark_orange",
                 "moderate": "black on orange1",
                 "minor": "black on gold1",
-                "none": "white on bright_black"
+                "none": "white on bright_black",
+                None: "white on bright_black",
             }
             recent = forecast['-1']
             current = forecast['0']
             forecast1d = forecast['1']
             text = self.forecast
             text.plain = ''
-            text.append(f'R{recent["R"]["Scale"]}', style=styles[recent["R"]["Text"]])
+            text.append(f'R{recent["R"]["Scale"] or "-"}', style=styles[recent["R"]["Text"]])
             text.append('|')
-            text.append(f'S{recent["S"]["Scale"]}', style=styles[recent["S"]["Text"]])
+            text.append(f'S{recent["S"]["Scale"] or "-"}', style=styles[recent["S"]["Text"]])
             text.append('|')
-            text.append(f'G{recent["G"]["Scale"]}', style=styles[recent["G"]["Text"]])
+            text.append(f'G{recent["G"]["Scale"] or "-"}', style=styles[recent["G"]["Text"]])
             text.append('  ')
-            text.append(f'R{current["R"]["Scale"]}', style=styles[current["R"]["Text"]])
+            text.append(f'R{current["R"]["Scale"] or "-"}', style=styles[current["R"]["Text"]])
             text.append('|')
-            text.append(f'S{current["S"]["Scale"]}', style=styles[current["S"]["Text"]])
+            text.append(f'S{current["S"]["Scale"] or "-"}', style=styles[current["S"]["Text"]])
             text.append('|')
-            text.append(f'G{current["G"]["Scale"]}', style=styles[current["G"]["Text"]])
+            text.append(f'G{current["G"]["Scale"] or "-"}', style=styles[current["G"]["Text"]])
             text.append('  ')
             text.append(f'R{forecast1d["R"]["MinorProb"]}/{forecast1d["R"]["MajorProb"]}', styles["none"]),
             text.append('|')
             text.append(f'S{forecast1d["S"]["Prob"]}', styles["none"]),
             text.append('|')
-            text.append(f'G{forecast1d["G"]["Scale"]}', styles[forecast1d["G"]["Text"]]),
+            text.append(f'G{forecast1d["G"]["Scale"] or "-"}', styles[forecast1d["G"]["Text"]]),
         except Exception as err:
             logger.warning('ignoring forecaster error', exc_info=err)
 
@@ -240,7 +241,6 @@ TableSourceT = TypeVar('TableSourceT', bound='heat.Table')
 class AbstractHeatMapFormatter(Generic[TableSourceT]):
     source: TableSourceT
     strokes = STROKES
-    root_str: str
 
     @functools.cached_property
     def max_count(self) -> int:
@@ -312,8 +312,8 @@ class AbstractHeatMapFormatter(Generic[TableSourceT]):
         cells.append(self.cumulative(row_data))
         return cells
 
-    def rows(self) -> Iterator[tuple[Union[int, str], Sequence[heat.Cell]]]:
-        return (row for row in self.source)
+    def rows(self) -> Iterable[tuple[Union[int, str], Sequence[heat.Cell]]]:
+        return list(row for row in self.source)
 
 
 class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency]):

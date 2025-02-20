@@ -115,7 +115,7 @@ class Web888Receiver(LocalReceiver):
         raise NotImplementedError(str(self.__class__))
 
     def observable_widths(self) -> list[int]:
-        return [12000]  # hardcoded to the value that kiwisdr uses.
+        return [12]  # hardcoded to the value that kiwisdr uses.
 
 
 class DummyReceiver(Web888Receiver):

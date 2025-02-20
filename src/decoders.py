@@ -196,13 +196,12 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
             on_prepare=self.on_prepare,
             on_running=self.on_execute,
             valid_return_codes=self.valid_return_codes(),
+            unrecoverable_errors=['Sample buffer overrun'],
         )
         return command
 
     def commandline(self) -> list[str]:
-        s = Dumphfdl.commandline(self)
-        logger.info(f'{s}')
-        return s
+        return Dumphfdl.commandline(self)
 
     def execution_arguments(self) -> dict:
         return {}
@@ -252,7 +251,6 @@ class SoapySDRDecoder(DirectDecoder):
                 args.append(opt_value)
         # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
         sample_rate_needed = int(self.channel.width / float(self.config.get('shoulder', 1.0))) * 1000
-        logger.info(f'SAMPLE RATE NEEDED {sample_rate_needed}')
         for sample_rate in self.sample_rates:
             if sample_rate_needed <= sample_rate[1]:
                 exact = sample_rate[0] != sample_rate[1]
