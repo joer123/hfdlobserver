@@ -89,7 +89,7 @@ class UDPProtocol(asyncio.protocols.BaseProtocol):
             del self.buffers[addr]
 
 
-class HFDLListener(hfdl_observer.bus.Publisher):
+class HFDLListener(hfdl_observer.bus.LocalPublisher):
     def __init__(self, settings: dict) -> None:
         self.settings = settings
 

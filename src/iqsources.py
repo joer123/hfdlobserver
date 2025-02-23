@@ -93,11 +93,11 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         os.close(self.pipe.write)
         pass
 
-    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
         logger.debug(f'{self} starting {channel}')
         logger.debug(f'{self} {self.commandline()}')
-        return self.start()
+        return await self.start()
 
     def create_command(self) -> KiwiClientCommand:
         self.pipe = Pipe(*os.pipe())

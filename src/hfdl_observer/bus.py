@@ -14,11 +14,42 @@ from typing import Any, AsyncGenerator, Callable, Optional, Union
 
 import requests
 
+import hfdl_observer.zero as zero
+
 
 logger = logging.getLogger(__name__)
 
 
-class Publisher:
+class RemotePublisher(zero.ZeroPublisher):
+    pass
+
+
+class RemoteSubscriber(zero.ZeroSubscriber):
+    pass
+
+
+class RemoteBroker:
+    def __init__(self, config: dict) -> None:
+        self.host = config.get('host', 'localhost')
+        self.pub_port = config.get('pub_port', 5560)
+        self.sub_port = config.get('sub_port', 5559)
+        self.context = zero.GLOBAL_CONTEXT
+        self._publisher = self.publisher()
+
+    def subscriber(self, target: str) -> RemoteSubscriber:
+        return RemoteSubscriber(f'tcp://{self.host}:{self.sub_port}', target, context=self.context)
+
+    def publisher(self) -> RemotePublisher:
+        return RemotePublisher(self.host, self.pub_port, context=self.context)
+
+    def publish(self, target: str, subject: str, payload: Any) -> None:
+        asyncio.get_running_loop().create_task(self._publisher.publish(target, subject, payload))
+
+
+REMOTE_BROKER: RemoteBroker
+
+
+class LocalPublisher:
     _subscribers: dict[str, list[Callable]]
 
     def __init__(self) -> None:
@@ -35,7 +66,7 @@ class Publisher:
             loop.call_soon(subscriber, body)
 
 
-class JSONWatcher(Publisher):
+class JSONWatcher(LocalPublisher):
     def jsonify(self, text: str) -> None:
         try:
             data = json.loads(text)
@@ -45,7 +76,7 @@ class JSONWatcher(Publisher):
             self.publish('json', data)
 
 
-class RoutineTask(Publisher):
+class RoutineTask(LocalPublisher):
     loop = asyncio.get_event_loop()
     enabled = False
     task: Optional[asyncio.Task] = None
@@ -100,10 +131,10 @@ class PeriodicCallback(PeriodicTask):
                 callback()
 
 
-class RemoteURLRefresher(PeriodicTask, Publisher):
+class RemoteURLRefresher(PeriodicTask, LocalPublisher):
     def __init__(self, url: str, period: int = 60):
-        PeriodicTask.__init__(self, period)
-        Publisher.__init__(self)
+        PeriodicTask.__init__(self, period=period)
+        LocalPublisher.__init__(self)
         self.url = url
 
     async def execute(self) -> None:
@@ -125,10 +156,10 @@ class RemoteURLRefresher(PeriodicTask, Publisher):
         return f"<RemoteURLRefresher: `{self.url}` @ {self.period}>"
 
 
-class FileRefresher(PeriodicTask, Publisher):
+class FileRefresher(PeriodicTask, LocalPublisher):
     def __init__(self, path: Union[pathlib.Path, str], period: int = 60):
         PeriodicTask.__init__(self, period)
-        Publisher.__init__(self)
+        LocalPublisher.__init__(self)
         self.path = pathlib.Path(path)
 
     async def execute(self) -> None:
@@ -153,12 +184,12 @@ class JSONFileRefresher(FileRefresher, JSONWatcher):
         return f"<JSONFileRefresher: `{self.path}` @ {self.period}>"
 
 
-class StreamWatcher(RoutineTask, Publisher):
+class StreamWatcher(RoutineTask, LocalPublisher):
     debug_logger: Optional[logging.Logger]
 
     def __init__(self, stream: AsyncGenerator, debug_logger: Optional[logging.Logger] = None):
         RoutineTask.__init__(self)
-        Publisher.__init__(self)
+        LocalPublisher.__init__(self)
         self.stream = stream
         self.debug_logger = debug_logger
 

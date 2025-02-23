@@ -13,7 +13,7 @@ import logging
 
 from typing import Any, Callable, Coroutine, Optional
 
-import hfdl_observer.bus
+import hfdl_observer.bus as bus
 import hfdl_observer.env
 import hfdl_observer.data as data
 import hfdl_observer.hfdl
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 REAPER_HORIZON = 3600
 
 
-class NetworkOverview(hfdl_observer.bus.Publisher):
+class NetworkOverview(bus.LocalPublisher):
     last_state: dict
     startables: list[Callable[[], Coroutine[Any, Any, None]]]
     tasks: list[asyncio.Task]
@@ -41,7 +41,7 @@ class NetworkOverview(hfdl_observer.bus.Publisher):
         self.tasks = []
         self.startables = []
         for file_source in [hfdl_observer.env.as_path(p) for p in config.get('station_files', [])]:
-            file_watcher = hfdl_observer.bus.FileRefresher(file_source, period=3600)
+            file_watcher = bus.FileRefresher(file_source, period=3600)
             assert file_source.exists(), f'{file_source} does not exist'
             # prime this pump... shouldn't be necessary, but.
             updater.on_systable(file_source.read_text())
@@ -60,7 +60,7 @@ class NetworkOverview(hfdl_observer.bus.Publisher):
                 url_source = {
                     'url': url_source
                 }
-            url_watcher = hfdl_observer.bus.RemoteURLRefresher(
+            url_watcher = bus.RemoteURLRefresher(
                 url_source['url'],
                 period=url_source.get('period', 60 + ix)
             )
@@ -116,18 +116,40 @@ class NetworkOverview(hfdl_observer.bus.Publisher):
             self.publish('state', payload)  # maybe should be a deepcopy
 
 
-class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
+class ReceiverProxy(bus.LocalPublisher, data.ChannelObserver):
     name: str
     channel: Optional[data.ObservingChannel]
 
-    def __init__(self, name: str, observable_widths: list[int], other: hfdl_observer.bus.Publisher):
-        super().__init__()
+
+    """
+    Messaging structure.
+    <target>:
+        @receiver:<receivername>
+            listen
+            listening
+            registered
+            deregistered
+        @observer
+            register
+            deregister
+        global
+            available
+            unavailable
+    body:
+        - <subject>
+        - data
+    """
+    def __init__(self, name: str, observable_widths: list[int], other: bus.LocalPublisher):
+        bus.LocalPublisher.__init__(self)
+        # bus.RemotePublisher.__init__(self, prefix=f'proxy.{name}')
         self.name = name
         self.observable_channel_widths = observable_widths
         self.channel = None
         other.subscribe(f'receiver:{self.name}', self.on_remote_event)
+        self.remote = bus.REMOTE_BROKER.subscriber(f'@receiver:{name}')
+        self.remote.add_callback(self.on_remote_event)
 
-    def connect(self, queue: hfdl_observer.bus.Publisher) -> None:
+    def connect(self, queue: bus.LocalPublisher) -> None:
         queue.subscribe(f'receiver:{self.name}', self.on_local_event)
 
     def send(self, *params: Any) -> None:
@@ -141,10 +163,12 @@ class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
         if action == 'listen':
             self.send(payload)
 
-    def on_remote_event(self, payload: tuple[str, Any]) -> None:
-        action, arg = payload
-        if action == 'listening':
-            self.channel = self.observing_channel_for(arg)
+    def on_local_listen(self, payload: Any) -> None:
+        self.send('listen', payload)
+
+    def on_remote_event(self, subject: str, payload: list[int]) -> None:
+        if subject == 'listening':
+            self.channel = self.observing_channel_for(payload)
             logger.debug(f'{self} updated from remote')
 
     def __str__(self) -> str:
@@ -160,7 +184,7 @@ class ReceiverProxy(hfdl_observer.bus.Publisher, data.ChannelObserver):
         return self.observable_channel_widths
 
 
-class AbstractConductor(hfdl_observer.bus.Publisher, data.ChannelObserver):
+class AbstractConductor(bus.LocalPublisher, data.ChannelObserver):
     ranked_station_ids: list[int]
     ignored_frequencies: list[tuple[int, int]]
     proxies: list[ReceiverProxy]
@@ -350,7 +374,7 @@ class DiverseConductor(UniformConductor):
         return actual_channels
 
 
-class Reaper(hfdl_observer.bus.Publisher):
+class Reaper(bus.LocalPublisher):
     channels: dict[int, data.ObservingChannel]
     last_seen: dict[int, int]
 

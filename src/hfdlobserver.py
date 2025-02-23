@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 
 import click
 
-import hfdl_observer.bus
+import hfdl_observer.bus as bus
 import hfdl_observer.data
 import hfdl_observer.heat
 import hfdl_observer.hfdl
@@ -28,6 +28,7 @@ import hfdl_observer.listeners
 import hfdl_observer.manage
 import hfdl_observer.network as network
 import hfdl_observer.util as util
+import hfdl_observer.zero as zero
 
 import hfdl_observer.orm as orm
 
@@ -39,7 +40,7 @@ logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if _
 TRACEMALLOC = False
 
 
-class HFDLObserver(hfdl_observer.bus.Publisher):
+class HFDLObserver(bus.LocalPublisher):
     local_receivers: list[receivers.LocalReceiver]
     proxies: list[hfdl_observer.manage.ReceiverProxy]
     running: bool = True
@@ -131,12 +132,11 @@ class HFDLObserver(hfdl_observer.bus.Publisher):
         self.packet_watcher.prune_every(60)
         self.network_overview.start()
         self.hfdl_listener.start(self.hfdl_consumers)
-        self.conductor.reaper.start()
+        # reaper is currently not used: self.conductor.reaper.start()
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         logger.warning(f'{self} killed')
-        for receiver in self.local_receivers:
-            receiver.kill()
+        await asyncio.gather(*[receiver.kill() for receiver in self.local_receivers])
 
 
 async def async_observe(observer: HFDLObserver) -> None:
@@ -168,7 +168,7 @@ async def async_observe(observer: HFDLObserver) -> None:
                     last_snapshot = snapshot
     except asyncio.CancelledError:
         logger.error('Observer loop cancelled')
-        observer.kill()
+        await observer.kill()
 
 
 def cancel_all_tasks() -> None:
@@ -188,6 +188,10 @@ def observe(
     loop = asyncio.get_event_loop()
 
     observer = HFDLObserver(settings.registry['observer'])
+    message_broker = zero.ZeroBroker()
+    message_broker.start()  # daemon thread, not async.
+    remote_broker = bus.RemoteBroker(settings.registry.get('messaging', {}))
+    bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...w
 
     cumulative = network.CumulativePacketStats()
     observer.subscribe('packet', cumulative.on_hfdl)

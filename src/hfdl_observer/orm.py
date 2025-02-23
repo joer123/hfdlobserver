@@ -88,11 +88,11 @@ class StationAvailability(DbEntity):  # type: ignore
         before_prune = pony.count(a for a in StationAvailability)
         horizon = to_timestamp(util.now() - datetime.timedelta(days=1))
         pony.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
-        # pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
+        pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
         # logger.debug(f'DB size is {pages * pagesize()}')
         after_prune = pony.count(a for a in StationAvailability)
         if after_prune < before_prune:
-            logger.info(f'pruned {before_prune - after_prune} StationAvailability records')
+            logger.info(f'pruned {before_prune - after_prune} StationAvailability records ({pages} db pages used)')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -120,11 +120,11 @@ class ReceivedPacket(DbEntity):  # type: ignore
             horizon = to_timestamp(before)
             # initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
             pony.delete(p for p in ReceivedPacket if p.when < horizon)
-            # after = int(db.execute("PRAGMA page_count;").fetchone()[0])
+            after = int(db.execute("PRAGMA page_count;").fetchone()[0])
             # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
             after_prune = pony.count(r for r in ReceivedPacket)
             if after_prune < before_prune:
-                logger.info(f'pruned {before_prune - after_prune} ReceivedPacket records')
+                logger.info(f'pruned {before_prune - after_prune} ReceivedPacket records ({after} db pages used)')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 

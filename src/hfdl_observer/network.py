@@ -118,7 +118,7 @@ class StationAvailability:
 
 
 # protocol, really.
-class AbstractNetworkUpdater(bus.Publisher):
+class AbstractNetworkUpdater(bus.LocalPublisher):
     def current(self) -> Sequence[StationAvailability]:
         raise NotImplementedError()
 
@@ -268,7 +268,7 @@ class AbstractNetworkUpdater(bus.Publisher):
             self.updated()
 
 
-class CumulativePacketStats(bus.Publisher):
+class CumulativePacketStats(bus.LocalPublisher):
     packets: int = 0
     from_air: int = 0
     from_ground: int = 0

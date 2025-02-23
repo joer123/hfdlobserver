@@ -47,13 +47,13 @@ class BaseDecoder:
     def station_id(self) -> Optional[str]:
         return self.config.get('station_id', None)
 
-    def start(self) -> asyncio.Task:
+    async def start(self) -> asyncio.Task:
         raise NotImplementedError()
 
-    def stop(self) -> Optional[asyncio.Task]:
+    async def stop(self) -> Optional[asyncio.Task]:
         raise NotImplementedError()
 
-    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         raise NotImplementedError()
 
     def __str__(self) -> str:
@@ -158,9 +158,9 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
         os.close(self.iq_fd)
         pass
 
-    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
-        return self.start()
+        return await self.start()
 
     def create_command(self) -> IQDecoderCommand:
         command = IQDecoderCommand(
@@ -175,7 +175,7 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
 
 class DummyDecoder(IQDecoderProcess):
-    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
         logger.debug(f'{self} command {self.commandline()}')
         logger.debug(f'{self} listening on {channel}')
@@ -209,10 +209,10 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
         pass
 
-    def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         logger.info(f'asked to listen to {channel!r}')
         self.channel = channel
-        return self.start()
+        return await self.start()
 
     def observable_channel_widths(self) -> list[int]:
         raise NotImplementedError(str(self.__class__))

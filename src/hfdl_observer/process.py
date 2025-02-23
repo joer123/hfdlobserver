@@ -144,24 +144,31 @@ class Command:
         finally:
             self.logger.debug('run completed')
 
-    def terminate(self) -> Optional[asyncio.Task]:
+    async def terminate(self) -> Optional[asyncio.Task]:
         if getattr(self, 'process', None):
             self.terminated = True
             self.process_logger.info('terminating')
             try:
                 self.process.terminate()
+                if self.task is not None:
+                    await asyncio.wait_for(self.task, timeout=3)
+            except asyncio.TimeoutError:
+                logger.warn(f'{self} process did not end cleanly. killing.')
+                await self.kill()
             except ProcessLookupError as e:
                 logger.info('problem', exc_info=e)
         else:
             self.process_logger.debug('no process, cannot terminate.')
         return self.task
 
-    def kill(self) -> Optional[asyncio.Task]:
+    async def kill(self) -> Optional[asyncio.Task]:
         if getattr(self, 'process', None):
             self.process_logger.warning('killing')
             self.killed = True
             try:
                 self.process.kill()
+                if self.task is not None:
+                    await asyncio.wait_for(self.task, timeout=3)
             except ProcessLookupError as e:
                 logger.info('problem', exc_info=e)
         else:
@@ -187,14 +194,14 @@ class Command:
                 if any(re.search(pattern, line) for pattern in self.unrecoverable_errors):
                     stream_logger.warning(f'encountered unrecoverable error: "{line}".')
                     # terminate, subclasses can restart process if desired.
-                    self.terminate()
+                    await self.terminate()
                     break
                 if any(re.search(pattern, line) for pattern in self.recoverable_errors):
                     self.recoverable_error_count += 1
                     stream_logger.debug(f'recoverable error detected. Current count {self.recoverable_error_count}')
                     if self.recoverable_error_count > self.recoverable_error_limit:
                         stream_logger.warning(f'received too many recoverable errors `{line}`.')
-                        self.terminate()
+                        await self.terminate()
                         break
                 if not self.process:
                     break
@@ -227,24 +234,25 @@ class ProcessHarness:
     def cleanup(self, _: Any) -> None:
         self.command = None
 
-    def start(self) -> asyncio.Task:
+    async def start(self) -> asyncio.Task:
         if self.command:
-            self.command.kill()
+            await self.command.kill()
         command: Command = self.create_command()
         self.command = command
         task = self.command.start()
         task.add_done_callback(self.cleanup)
         return task
 
-    def stop(self) -> Optional[asyncio.Task]:
+    async def stop(self) -> Optional[asyncio.Task]:
         if self.command:
-            return self.command.terminate()
+            return await self.command.terminate()
         return None
 
-    def kill(self) -> Optional[asyncio.Task]:
+    async def kill(self) -> Optional[asyncio.Task]:
         if self.command:
-            return self.command.kill()
+            return await self.command.kill()
         return None
 
     def reset_recoverable_error_count(self, *_: Any) -> None:
         self.recoverable_error_count = 0
+

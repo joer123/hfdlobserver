@@ -11,10 +11,10 @@ import functools
 import logging
 import random
 
-from typing import Any
+from typing import Any, Optional
 
 import hfdl_observer
-import hfdl_observer.bus
+import hfdl_observer.bus as bus
 import hfdl_observer.data as data
 import hfdl_observer.manage
 import hfdl_observer.process
@@ -30,10 +30,12 @@ class ReceiverError(Exception):
     pass
 
 
-class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
+class LocalReceiver(bus.LocalPublisher, data.ChannelObserver):
     frequencies: list[int]
     name: str
     tasks: list[asyncio.Task]
+    conductor: Optional[str] = None
+    registered: bool = False
 
     def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
         self.config = config
@@ -42,17 +44,53 @@ class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
         self.listener = listener
         self.frequencies = []
         self.tasks = []
+        self.remote = bus.REMOTE_BROKER.subscriber(f'@receiver:{name}')
+        self.remote.add_callback(self.on_remote_event)
+        self.broadcast = bus.REMOTE_BROKER.subscriber('/')
+        self.broadcast.add_callback(self.on_remote_event, lambda t: t.startswith('/available'))
+        self.broadcast.add_callback(self.on_remote_event, lambda t: t.startswith('/unavailable'))
         super().__init__()
 
-    def on_remote_event(self, event: tuple[str, Any]) -> None:
-        action, arg = event
-        if action == 'listen':
-            self.listen(arg)
-        elif action == 'ping':
-            self.publish(f'receiver:{self.name}', ('pong', None))
-        elif action == 'die':
-            logger.warning(f'{self} received DIE order')
-            # self.kill()
+    def on_remote_event(self, subject: str, payload: Any) -> None:
+        handler = getattr(self, f'on_remote_{subject.strip("/")}', None)
+        if callable(handler):
+            handler(payload)
+
+    def on_remote_listen(self, payload: list[int]) -> None:
+        asyncio.get_running_loop().call_soon(self.listen, payload)
+
+    def on_remote_listening(self, _: Any) -> None:
+        pass
+
+    def on_remote_registered(self, _: Any) -> None:
+        self.registered = True
+
+    def on_remote_deregistered(self, _: Any) -> None:
+        self.registered = False
+
+    def on_remote_ping(self, _: Any) -> None:
+        pass
+
+    def on_remote_die(self, _: Any) -> None:
+        logger.warning(f'{self} received DIE order')
+        # self.kill()
+        # self.deregister()
+
+    def on_remote_available(self, conductor: Any) -> None:
+        if not self.registered:
+            self.register(conductor)
+
+    def on_remote_unavailable(self, conductor: Any) -> None:
+        pass
+
+    def register(self, conductor: str) -> None:
+        self.conductor = conductor
+        bus.REMOTE_BROKER.publish(conductor, 'register', {'name': self.name, 'widths': self.observable_widths()})
+
+    def deregister(self) -> None:
+        if self.conductor:
+            bus.REMOTE_BROKER.publish(self.conductor, 'deregister', self.name)
+
 
     @functools.cached_property
     def proxy(self) -> hfdl_observer.manage.ReceiverProxy:
@@ -66,22 +104,22 @@ class LocalReceiver(hfdl_observer.bus.Publisher, data.ChannelObserver):
         # in this implementation it must be exact.
         return freqs == self.frequencies
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         pass
 
-    def listen(self, frequencies: list[int]) -> None:
+    async def listen(self, frequencies: list[int]) -> None:
         self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
-        self.stop()
+        await self.stop()
         self.frequencies = frequencies
         self.channel = self.observing_channel_for(frequencies)
-        self.start()
+        await self.start()
         self.logger.debug(f'switched to {frequencies}')
         # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
-    def start(self) -> None:
+    async def start(self) -> None:
         self.task = asyncio.get_running_loop().create_task(self.run())
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         pass
 
     async def run(self) -> None:
@@ -139,27 +177,27 @@ class Web888ExecReceiver(Web888Receiver):
     async def run(self) -> None:
         self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
-        client_task = self.client.listen(self.channel)
+        client_task = await self.client.listen(self.channel)
         async with self.client.running_condition:
             self.tasks.append(client_task)
             client_task.add_done_callback(self.on_task_done)
             await self.client.running_condition.wait()
             self.decoder.iq_fd = self.client.pipe.read
-            decoder_task = self.decoder.listen(self.channel)
+            decoder_task = await self.decoder.listen(self.channel)
             self.tasks.append(decoder_task)
             decoder_task.add_done_callback(self.on_task_done)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self.logger.debug('Stopping')
         self.tasks = []  # don't care about these tasks anymore
-        self.client.stop()
-        self.decoder.stop()
+        await self.client.stop()
+        await self.decoder.stop()
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         self.logger.debug('Killing')
         self.tasks = []  # don't care about these tasks anymore
-        self.client.kill()
-        self.decoder.kill()
+        await self.client.kill()
+        await self.decoder.kill()
 
 
 class Web888PipeReceiver(Web888Receiver):
@@ -172,15 +210,15 @@ class Web888PipeReceiver(Web888Receiver):
         self.receiver_pipe = ReceiverPipe(self.client.commandline() + ['|'] + self.decoder.commandline())
 
     async def run(self) -> None:
-        self.receiver_pipe.start()
+        await self.receiver_pipe.start()
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self.logger.debug('Stopping')
-        self.receiver_pipe.stop()
+        await self.receiver_pipe.stop()
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         self.logger.debug('Killing')
-        self.receiver_pipe.kill()
+        await self.receiver_pipe.kill()
 
 
 class ReceiverPipe(hfdl_observer.process.ProcessHarness):
@@ -215,19 +253,19 @@ class DirectReceiver(LocalReceiver):
     async def run(self) -> None:
         self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
-        decoder_task = self.decoder.listen(self.channel)
+        decoder_task = await self.decoder.listen(self.channel)
         self.tasks.append(decoder_task)
         decoder_task.add_done_callback(self.on_task_done)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self.logger.debug('Stopping')
         self.tasks = []  # don't care about these tasks anymore
-        self.decoder.stop()
+        await self.decoder.stop()
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         self.logger.debug('Killing')
         self.tasks = []  # don't care about these tasks anymore
-        self.decoder.kill()
+        await self.decoder.kill()
 
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
