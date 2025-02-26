@@ -256,7 +256,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
         position = packet_info.position or (None, None)
         ReceivedPacket(
             when=to_timestamp(util.now()),
-            agent=packet_info.station or '',
+            agent=packet_info.station or '(unknown)',
             ground_station=packet_info.ground_station['id'],
             frequency=packet_info.frequency,
             kind='spdu' if packet_info.is_squitter else 'lpdu',
@@ -279,6 +279,13 @@ class PacketWatcher(data.AbstractPacketWatcher):
             self.periodic_task.cancel()
         periodic_callback = bus.PeriodicCallback(period, [self.prune], False)
         self.periodic_task = asyncio.get_event_loop().create_task(periodic_callback.run())
+
+    async def stop_pruning(self) -> None:
+        if self.periodic_task:
+            self.periodic_task.cancel()
+            await self.periodic_task
+            self.periodic_task = None
+
 
     @pony.db_session(strict=True)
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:

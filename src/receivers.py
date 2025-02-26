@@ -10,6 +10,7 @@ import collections.abc
 import functools
 import logging
 import random
+import uuid
 
 from typing import Any, Optional
 
@@ -30,7 +31,7 @@ class ReceiverError(Exception):
     pass
 
 
-class LocalReceiver(bus.LocalPublisher, data.ChannelObserver):
+class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     frequencies: list[int]
     name: str
     tasks: list[asyncio.Task]
@@ -38,35 +39,42 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver):
     registered: bool = False
 
     def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
+        self.uuid = str(uuid.uuid4())
         self.config = config
         self.name = name
         self.logger = logger.getChild(self.name)
         self.listener = listener
         self.frequencies = []
         self.tasks = []
-        self.remote = bus.REMOTE_BROKER.subscriber(f'@receiver:{name}')
-        self.remote.add_callback(self.on_remote_event)
-        self.broadcast = bus.REMOTE_BROKER.subscriber('/')
-        self.broadcast.add_callback(self.on_remote_event, lambda t: t.startswith('/available'))
-        self.broadcast.add_callback(self.on_remote_event, lambda t: t.startswith('/unavailable'))
+        self.recipient_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
+        self.recipient_subscriber.add_callback(self.on_remote_event)
+        self.broadcast_subscriber = bus.REMOTE_BROKER.subscriber('/')
+        self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('available'))
+        self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('unavailable'))
         super().__init__()
 
-    def on_remote_event(self, subject: str, payload: Any) -> None:
-        handler = getattr(self, f'on_remote_{subject.strip("/")}', None)
-        if callable(handler):
-            handler(payload)
+    def payload(self, **data: Any) -> dict:
+        _payload = {
+            'name': self.name,
+            'uuid': self.uuid,
+        }
+        _payload.update(data)
+        return _payload
+
+    @functools.cached_property
+    def target(self) -> str:
+        return f'@receiver+{self.name}'
 
     def on_remote_listen(self, payload: list[int]) -> None:
-        asyncio.get_running_loop().call_soon(self.listen, payload)
+        asyncio.get_running_loop().create_task(self.listen(payload))
 
-    def on_remote_listening(self, _: Any) -> None:
-        pass
+    def on_remote_registered(self, uuid: str) -> None:
+        if uuid == self.uuid:
+            self.registered = True
 
-    def on_remote_registered(self, _: Any) -> None:
-        self.registered = True
-
-    def on_remote_deregistered(self, _: Any) -> None:
-        self.registered = False
+    def on_remote_deregistered(self, uuid: str) -> None:
+        if uuid == self.uuid:
+            self.registered = False
 
     def on_remote_ping(self, _: Any) -> None:
         pass
@@ -76,44 +84,52 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver):
         # self.kill()
         # self.deregister()
 
-    def on_remote_available(self, conductor: Any) -> None:
+    def on_remote_available(self, conductor: str) -> None:
         if not self.registered:
             self.register(conductor)
 
-    def on_remote_unavailable(self, conductor: Any) -> None:
-        pass
+    def on_remote_unavailable(self, conductor: str) -> None:
+        self.registered = False
+
+    def on_observer_start(self) -> None:
+        self.recipient_subscriber.start()
+        self.broadcast_subscriber.start()
 
     def register(self, conductor: str) -> None:
         self.conductor = conductor
-        bus.REMOTE_BROKER.publish(conductor, 'register', {'name': self.name, 'widths': self.observable_widths()})
+        bus.REMOTE_BROKER.publish(conductor, 'register', self.payload(widths=self.observable_widths()))
 
     def deregister(self) -> None:
         if self.conductor:
-            bus.REMOTE_BROKER.publish(self.conductor, 'deregister', self.name)
-
+            bus.REMOTE_BROKER.publish(self.conductor, 'deregister', self.payload())
 
     @functools.cached_property
     def proxy(self) -> hfdl_observer.manage.ReceiverProxy:
-        _proxy = hfdl_observer.manage.ReceiverProxy(self.name, self.observable_widths(), self)
-        _proxy.subscribe(f'receiver:{self.name}', self.on_remote_event)
+        _proxy = hfdl_observer.manage.ReceiverProxy(self.name, self.uuid, self.observable_widths())
+        # _proxy.subscribe(f'receiver:{self.name}', self.on_remote_event)
         # a bit presumptuous.
-        self.subscribe(f'receiver:{self.name}', _proxy.on_remote_event)
+        # self.subscribe(f'receiver:{self.name}', _proxy.on_remote_event)
         return _proxy
 
     def covers(self, freqs: list[int]) -> bool:
         # in this implementation it must be exact.
-        return freqs == self.frequencies
+        return set(freqs) == set(self.frequencies)
 
     async def kill(self) -> None:
         pass
 
     async def listen(self, frequencies: list[int]) -> None:
-        self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
+        if set(frequencies) == set(self.frequencies):
+            self.logger.info(f'already listening to {frequencies}')
+            bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=frequencies))
+            return
+        self.logger.info(f'switching to {frequencies} from {self.frequencies}')
         await self.stop()
         self.frequencies = frequencies
         self.channel = self.observing_channel_for(frequencies)
         await self.start()
-        self.logger.debug(f'switched to {frequencies}')
+        self.logger.info(f'switched to {frequencies}')
+        # bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=frequencies))
         # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
     async def start(self) -> None:
@@ -136,7 +152,8 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver):
                 # there are no more tasks, so there's no valid channel
                 self.frequencies = []
                 self.channel = self.observing_channel_for([])
-                self.publish(f'receiver:{self.name}', ('listening', self.frequencies))
+                bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=self.frequencies))
+                # self.publish(f'receiver:{self.name}', ('listening', self.frequencies))
 
     def __str__(self) -> str:
         return f'({self.__class__.__name__}) {self.name} on {self.frequencies}'
@@ -163,7 +180,8 @@ class DummyReceiver(Web888Receiver):
         self.decoder = decoders.DummyDecoder(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> None:
-        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
+        bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
+        # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
 
 
 class Web888ExecReceiver(Web888Receiver):
@@ -175,7 +193,8 @@ class Web888ExecReceiver(Web888Receiver):
         self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> None:
-        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
+        bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
+        # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         client_task = await self.client.listen(self.channel)
         async with self.client.running_condition:
@@ -251,7 +270,9 @@ class DirectReceiver(LocalReceiver):
         logger.info(f'observable channel widths {self.observable_channel_widths}')
 
     async def run(self) -> None:
-        self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
+        bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
+        self.logger.info('queued')
+        # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         decoder_task = await self.decoder.listen(self.channel)
         self.tasks.append(decoder_task)

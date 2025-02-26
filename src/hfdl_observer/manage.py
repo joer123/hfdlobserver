@@ -22,6 +22,7 @@ import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
+EOL = '\n'
 
 
 REAPER_HORIZON = 3600
@@ -116,69 +117,55 @@ class NetworkOverview(bus.LocalPublisher):
             self.publish('state', payload)  # maybe should be a deepcopy
 
 
-class ReceiverProxy(bus.LocalPublisher, data.ChannelObserver):
+class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     name: str
+    uuid: str
     channel: Optional[data.ObservingChannel]
 
-
-    """
-    Messaging structure.
-    <target>:
-        @receiver:<receivername>
-            listen
-            listening
-            registered
-            deregistered
-        @observer
-            register
-            deregister
-        global
-            available
-            unavailable
-    body:
-        - <subject>
-        - data
-    """
-    def __init__(self, name: str, observable_widths: list[int], other: bus.LocalPublisher):
-        bus.LocalPublisher.__init__(self)
-        # bus.RemotePublisher.__init__(self, prefix=f'proxy.{name}')
+    def __init__(self, name: str, uuid: str, observable_widths: list[int]) -> None:
         self.name = name
+        self.uuid = uuid
         self.observable_channel_widths = observable_widths
         self.channel = None
-        other.subscribe(f'receiver:{self.name}', self.on_remote_event)
-        self.remote = bus.REMOTE_BROKER.subscriber(f'@receiver:{name}')
-        self.remote.add_callback(self.on_remote_event)
+        # other.subscribe(f'receiver:{self.name}', self.on_remote_event)
+        self.direct_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
+        self.direct_subscriber.add_callback(self.on_remote_event)
+        self.direct_subscriber.start()
 
-    def connect(self, queue: bus.LocalPublisher) -> None:
-        queue.subscribe(f'receiver:{self.name}', self.on_local_event)
+    @functools.cached_property
+    def target(self) -> str:
+        return f'@receiver+{self.name}'
 
-    def send(self, *params: Any) -> None:
-        self.publish(f'receiver:{self.name}', tuple(params))
+    # def connect(self, publisher: bus.LocalPublisher) -> None:
+    #     publisher.subscribe(f'receiver:{self.name}', self.on_local_event)
+
+    def relay(self, subject: str, payload: Any) -> None:
+        bus.REMOTE_BROKER.publish(self.target, subject, payload)
 
     def covers(self, channel: data.ObservingChannel) -> bool:
         return self.channel is not None and self.channel.covers(channel)
 
-    def on_local_event(self, payload: tuple[str, Any]) -> None:
-        action, arg = payload
-        if action == 'listen':
-            self.send(payload)
+    # def on_local_event(self, payload: tuple[str, Any]) -> None:
+    #     action, arg = payload
+    #     relayed = set(['listen', 'die', 'ping'])
+    #     if action in relayed:
+    #         self.relay(action, payload)
 
-    def on_local_listen(self, payload: Any) -> None:
-        self.send('listen', payload)
+    # def on_local_listen(self, payload: Any) -> None:
+    #     self.relay('listen', payload)
 
-    def on_remote_event(self, subject: str, payload: list[int]) -> None:
-        if subject == 'listening':
-            self.channel = self.observing_channel_for(payload)
-            logger.debug(f'{self} updated from remote')
+    def on_remote_listening(self, payload: dict) -> None:
+        logger.info(f'{self} remote now listening to {len(payload["frequencies"])} frequencies')
+        self.channel = self.observing_channel_for(payload['frequencies'])
 
     def __str__(self) -> str:
         return f'{self.name} on {self.channel}'
 
     def die(self) -> None:
-        self.send('die')
+        self.relay('die', self.uuid)
 
     def listen(self, freqs: list[int]) -> None:
-        self.send('listen', freqs)
+        self.relay('listen', freqs)
 
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
@@ -201,6 +188,10 @@ class AbstractConductor(bus.LocalPublisher, data.ChannelObserver):
 
     def add_receiver(self, receiver: ReceiverProxy) -> None:
         self.proxies.append(receiver)
+
+    def remove_receiver(self, receiver: ReceiverProxy) -> None:
+        if receiver in self.proxies:
+            self.proxies.remove(receiver)
 
     def is_ignored(self, frequency: int) -> bool:
         for ignore in self.ignored_frequencies:
@@ -285,7 +276,7 @@ class UniformConductor(AbstractConductor):
                 logger.debug(f'adding {channel} to starts')
                 starts.append(channel)
 
-        available = []
+        available: list[ReceiverProxy] = []
         for receiver in proxies_by_width:
             if receiver.name in keeps:
                 channel = keeps[receiver.name]
@@ -310,10 +301,10 @@ class UniformConductor(AbstractConductor):
                     break
             else:
                 logger.warning(f'cannot allocate a receiver for {channel}')
-                logger.info(f'channels\n{"\n".join(repr(c) for c in channels)}')
-                logger.info(f'available left\n{"\n".join(str(a) for a in available)}')
-                logger.info(f'keeps\n{"\n".join(str(a) for a in keeps.values())}')
-                logger.info(f'starts\n{"\n".join(str(s) for s in starts)}')
+                logger.info(f'channels\n{EOL.join(repr(c) for c in channels)}')
+                logger.info(f'available left\n{EOL.join(str(a) for a in available)}')
+                logger.info(f'keeps\n{EOL.join(str(a) for a in keeps.values())}')
+                logger.info(f'starts\n{EOL.join(str(s) for s in starts)}')
 
     def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
         if not self.proxies:
@@ -369,7 +360,7 @@ class DiverseConductor(UniformConductor):
         active_count = len([f for f in assigned if network.STATIONS.is_active(f)])
         extra = untargetted_count
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
-        # logger.info(f'actual channels\n{"\n".join(repr(c) for c in actual_channels)}')
+        # logger.info(f'actual channels\n{EOL.join(repr(c) for c in actual_channels)}')
 
         return actual_channels
 

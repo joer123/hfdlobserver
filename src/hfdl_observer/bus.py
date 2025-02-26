@@ -25,7 +25,12 @@ class RemotePublisher(zero.ZeroPublisher):
 
 
 class RemoteSubscriber(zero.ZeroSubscriber):
-    pass
+    task: asyncio.Task
+
+    def start(self) -> asyncio.Task:
+        # logger.info(f'starting {self.url}/{self.channel}')
+        self.task = asyncio.get_running_loop().create_task(self.run())
+        return self.task
 
 
 class RemoteBroker:
@@ -43,7 +48,22 @@ class RemoteBroker:
         return RemotePublisher(self.host, self.pub_port, context=self.context)
 
     def publish(self, target: str, subject: str, payload: Any) -> None:
+        # logger.info(f'queuing {target} {subject}')
         asyncio.get_running_loop().create_task(self._publisher.publish(target, subject, payload))
+
+    async def publish_now(self, target: str, subject: str, payload: Any) -> None:
+        # logger.info(f'pushing {target} {subject}')
+        await self._publisher.publish(target, subject, payload)
+
+
+class GenericRemoteEventDispatcher:
+    def on_remote_event(self, subject: str, payload: Any) -> None:
+        handler = getattr(self, f'on_remote_{subject.strip()}', None)
+        if callable(handler):
+            # logger.info(f'dispatching {subject} via {handler}')
+            handler(payload)
+        else:
+            logger.info(f'ignoring on_remote_{subject.strip()}')
 
 
 REMOTE_BROKER: RemoteBroker
@@ -117,6 +137,16 @@ class PeriodicTask():
                 logger.info(f'{self} executing')
             await self.execute()
             await asyncio.sleep(self.period)
+
+    def start(self) -> None:
+        if not hasattr(self, 'task'):
+            self.task = asyncio.get_running_loop().create_task(self.run())
+
+    async def stop(self) -> None:
+        task = getattr(self, 'task')
+        if task:
+            self.enabled = False
+            await task
 
 
 class PeriodicCallback(PeriodicTask):

@@ -109,7 +109,7 @@ registry: dict[str, dict] = {
                     'type': 'SoapySDRDecoder',
                     'config': 'soapy'
                 }
-            }
+            },
         },
         'decoder': {
             'default': {
@@ -184,6 +184,23 @@ registry: dict[str, dict] = {
                 },
                 'sample-rates': [912000, 768000, 650000, 456000, 384000, 228000, 192000],
                 'gain': 52,
+            },
+            'rx888mk2': {
+                'type': 'RX888mk2Decoder',
+                'quiet': True,
+                'settle_time': 1,
+                'decoder_path': 'dumphfdl',
+                'system_table': 'systable.conf',
+                'system_table_save': 'systable_updated.conf',
+                'shoulder': 0.8,
+                'soapysdr': {
+                    'driver': 'SDDC'
+                },
+                'sample-rates': [2000000, 4000000, 8000000],
+                'gain-elements': {
+                    'IF': '32',
+                    'RF': '0',
+                },
             }
         },
         'client': {

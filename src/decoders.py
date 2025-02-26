@@ -249,18 +249,51 @@ class SoapySDRDecoder(DirectDecoder):
                     opt_value = str(value)
                 args.append(f'--{to_opt}')
                 args.append(opt_value)
+
+        # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
+        sample_rate = self.best_sample_rate()
+        args.append('--sample-rate')
+        args.append(str(sample_rate))
+
+        return args
+
+    def best_sample_rate(self) -> int:
         # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
         sample_rate_needed = int(self.channel.width / float(self.config.get('shoulder', 1.0))) * 1000
         for sample_rate in self.sample_rates:
             if sample_rate_needed <= sample_rate[1]:
                 exact = sample_rate[0] != sample_rate[1]
-                args.append('--sample-rate')
-                args.append(str(sample_rate_needed if exact else sample_rate[1]))
-                break
+                return sample_rate_needed if exact else sample_rate[1]
         else:
             raise ValueError(f'cannot find an acceptable sample rate for needed width {sample_rate_needed}')
-        return args
 
     def observable_channel_widths(self) -> list[int]:
         shoulder = self.config.get('shoulder', 1.0)
         return [int((hi * shoulder) / 1000) for lo, hi in self.sample_rates]
+
+
+class RX888mk2Decoder(SoapySDRDecoder):
+    def listen_args(self) -> list[str]:
+        args = super().listen_args()
+        # the quirk here is that RX888mk2 under dumphfdl appears to need centerfrequencies in integral MHz.
+        sample_rate = self.best_sample_rate()
+        # There is an edge case where rounding to a MHz will put some frequencies into the shoulder. I think this is
+        # probably okay. but warn anyways.
+        pure_center = self.channel.center  # khz
+        actual_center = int(round(pure_center / 1000.0) * 1000)
+        # check for shoulders.
+        shoulder = float(self.config.get('shoulder', 1.0)) * sample_rate / 2.0
+        shoulders = [actual_center - shoulder, actual_center + shoulder]
+        for freq in self.channel.frequencies:
+            if shoulders[0] <= freq <= shoulders[1]:
+                logger.debug(f'{freq} is within shoulders')
+            else:
+                logger.warning(f'{freq} is not within {shoulders} and reception may be impaired')
+        args.append('--centerfreq')
+        args.append(str(actual_center))
+        return args
+
+    def commandline(self) -> list[str]:
+        cmd = super().commandline()
+        logger.info(f'COMMAND: {cmd}')
+        return cmd
