@@ -17,16 +17,21 @@ class ZeroBroker:
     # feeling cute, might delete later.
     thread: Optional[threading.Thread] = None
 
+    def __init__(self, host: str = '*', pub_port: int = 5559, sub_port: int = 5560) -> None:
+        self.host = host
+        self.pub_port = pub_port
+        self.sub_port = sub_port
+
     def run(self) -> None:
         context = zmq.Context()
 
         # Socket facing clients
         xpub = context.socket(zmq.XPUB)
-        xpub.bind("tcp://*:5559")
+        xpub.bind(f"tcp://{self.host}:{self.sub_port}")
 
         # Socket facing services
         xsub = context.socket(zmq.XSUB)
-        xsub.bind("tcp://*:5560")
+        xsub.bind(f"tcp://{self.host}:{self.pub_port}")
 
         zmq.proxy(xpub, xsub)
 
@@ -62,13 +67,14 @@ class ZeroSubscriber:
     async def run(self) -> None:
         if self.socket:
             return
+        self.running = True
         self.socket = self.context.socket(zmq.SUB)
         self.socket.connect(self.url)
         # logger.info(f'{self} subscribing to "{self.channel}"')
         self.socket.setsockopt(zmq.SUBSCRIBE, self.channel.encode())
 
         try:
-            while True:
+            while self.running:
                 message = await self.socket.recv_multipart()
                 header, body = message
                 payload = json.loads(body.decode())
@@ -82,6 +88,9 @@ class ZeroSubscriber:
             self.socket.setsockopt(zmq.LINGER, 0)
             self.socket.close()
             self.socket = None
+
+    async def stop(self) -> None:
+        self.running = False
 
 
 class ZeroPublisher:

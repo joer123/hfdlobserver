@@ -17,6 +17,12 @@ class ListenerConfig:
     address: str = '127.0.0.1'
     port: int = 5542
 
+    def __init__(self, data: dict | None = None) -> None:
+        if data is not None:
+            self.proto = data['protocol']
+            self.address = data['address']
+            self.port = int(data['port'])
+
 
 class ObservingChannel:
     _frequencies: set[int]

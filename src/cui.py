@@ -212,7 +212,7 @@ class CumulativeLine:
     bonus_observed: Optional[int] = None
     active: Optional[int] = None
 
-    def register(self, observer: hfdlobserver.HFDLObserver, cumulative: network.CumulativePacketStats) -> None:
+    def register(self, observer: hfdlobserver.HFDLObserverController, cumulative: network.CumulativePacketStats) -> None:
         self.cumulative = cumulative
         cumulative.subscribe('update', self.on_update)
         observer.subscribe('active', self.on_active)
@@ -516,7 +516,7 @@ class HeatMap:
     def by_agent(self, num_bins: int) -> AbstractHeatMapFormatter:
         return HeatMapByAgentFormatter(self.bin_size, num_bins)
 
-    def register(self, observer: hfdlobserver.HFDLObserver) -> None:
+    def register(self, observer: hfdlobserver.HFDLObserverController) -> None:
         observer.subscribe('packet', self.on_hfdl)
         observer.subscribe('observing', self.on_observing)
 
@@ -674,11 +674,10 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     )
 
     def observing(
-        observer: hfdlobserver.HFDLObserver,
+        observer: hfdlobserver.HFDLObserverController,
         cumulative: network.CumulativePacketStats,
     ) -> None:
         ticker.register(observer)  # , packet_counter)
-        cumulative_line.register(observer, cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
         asyncio.get_event_loop().create_task(display_updater.run())
 

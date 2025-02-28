@@ -42,17 +42,20 @@ class RemoteBroker:
         self._publisher = self.publisher()
 
     def subscriber(self, target: str) -> RemoteSubscriber:
-        return RemoteSubscriber(f'tcp://{self.host}:{self.sub_port}', target, context=self.context)
+        url = f'tcp://{self.host}:{self.sub_port}'
+        logger.debug(f'subscriber {url}/{target}')
+        return RemoteSubscriber(url, target, context=self.context)
 
     def publisher(self) -> RemotePublisher:
+        logger.debug(f'publisher {self.host}:{self.pub_port}')
         return RemotePublisher(self.host, self.pub_port, context=self.context)
 
     def publish(self, target: str, subject: str, payload: Any) -> None:
-        # logger.info(f'queuing {target} {subject}')
+        logger.debug(f'queuing {target} {subject}')
         asyncio.get_running_loop().create_task(self._publisher.publish(target, subject, payload))
 
     async def publish_now(self, target: str, subject: str, payload: Any) -> None:
-        # logger.info(f'pushing {target} {subject}')
+        logger.debug(f'pushing {target} {subject}')
         await self._publisher.publish(target, subject, payload)
 
 

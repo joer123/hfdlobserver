@@ -56,7 +56,12 @@ registry: dict[str, dict] = {
             'port': 5540,
         },
         'local_receivers': [f'observer-{x:02}' for x in range(1, 14)],
-        'all_receivers': {f'observer-{x:02}': {'config': 'web888'} for x in range(1, 14)}
+        'all_receivers': {f'observer-{x:02}': {'config': 'web888'} for x in range(1, 14)},
+        'messaging': {
+            'host': 'localhost',
+            'pub_port': 5559,
+            'sub_port': 5560,
+        },
     },
     'cui': {
         'ticker': {
@@ -67,6 +72,15 @@ registry: dict[str, dict] = {
             'show_confidence': True,
             'show_targetting': True,
         }
+    },
+    'node': {
+        'local_receivers': [],
+        'all_receivers': {},
+        'messaging': {
+            'host': 'localhost',
+            'pub_port': 5559,
+            'sub_port': 5560,
+        },
     },
     "configs": {
         'receiver': {
@@ -183,7 +197,7 @@ registry: dict[str, dict] = {
                     'driver': 'airspyhf'
                 },
                 'sample-rates': [912000, 768000, 650000, 456000, 384000, 228000, 192000],
-                'gain': 52,
+                'gain': None,
             },
             'rx888mk2': {
                 'type': 'RX888mk2Decoder',

@@ -10,7 +10,7 @@ import functools
 import logging
 
 from enum import Enum
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 import hfdl_observer.bus as bus
 import hfdl_observer.hfdl as hfdl
@@ -266,6 +266,9 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
         if hfdl_stations:
             STATIONS.update(hfdl_stations)
             self.updated()
+
+    def prune(self, _: Any = None) -> None:
+        pass
 
 
 class CumulativePacketStats(bus.LocalPublisher):

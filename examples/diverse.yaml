@@ -1,0 +1,52 @@
+configs:
+  decoder:
+    default:
+      station_id: '*CO-CYTZ2-HFDL'
+    rx888mk2:
+      station_id: '*CO-CYTZ2-HFDL'
+    airspyhf:
+      station_id: '*CO-CYTZ2-HFDL'
+    # the base configuration is named this, so even though it will be used for an RSP1a, it is still named for RSPdx.
+    rspdx+sdrplay:
+      station_id: '*CO-CYTZ2-HFDL'
+      device-settings:
+        # these come from SoapySDRUtil --probe and you can set these as you like.
+        rfnotch_ctrl: 'false'
+        dabnotch_ctrl: 'false'
+        agc_setpoint: -14
+        biasT_ctrl: 'false'
+        rfgain_sel: 0
+      # The most complicated part of this. This defines the allowed sample rates for receivers using this configuration
+      # each entry in this list can be either a single samples-per-second value which means that precisely this sample
+      # rate can be used, or it can be a list itself as `[low, high]`. This covers the case where the receiver can
+      # handle an arbitrary sample rate (within the range). The first example is for an RSPdx without over burdening
+      # the driver or USB bus.
+      sample-rates: [1300000, 1536000, 2048000, [2000000, 5000000]]
+      # An RSP1a might be more like:
+      # sample-rates: [[2000000, 8000000]]
+      # SoapySDRUtil --probe can possibly help you identify what the possible sample rates available are.
+      # gain-elements:
+      #   # these are also the entries found in SDRSoapyUtil --probe.
+      #   # Note that SDRPlay handles gain parameters weirdly where the value is actually *attentuation*, so the higher
+      #   # the number, the lower the gain. If you do not want to mess with this, just leave this section commented
+      #   # and use the 'agc_setpoint' above. YMMV for different devices.
+      #   IFGR: 0
+      #   RFGR: 0
+      # I don't know what values RSP1a or RSP2 would have here, but you should pick the right one (even if there's only
+      # one, since if you omit it, this will currently fall back to the RSPdx default)
+      antenna: 'Antenna B'
+observer:
+  local_receivers:
+    - airspyhf
+    - rsp1a
+  all_receivers:
+    airspyhf-01:
+      config: soapysdr
+      decoder:
+        type: SoapySDRDecoder
+        config: airspyhf
+    rsp1a:
+      config: soapysdr
+      decoder:
+        type: SoapySDRDecoder
+        config: rspdx+sdrplay

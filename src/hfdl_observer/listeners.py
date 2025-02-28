@@ -7,6 +7,7 @@
 import asyncio
 import asyncio.protocols
 import collections
+import functools
 import json
 import logging
 
@@ -90,6 +91,8 @@ class UDPProtocol(asyncio.protocols.BaseProtocol):
 
 
 class HFDLListener(hfdl_observer.bus.LocalPublisher):
+    running: bool = False
+
     def __init__(self, settings: dict) -> None:
         self.settings = settings
 
@@ -100,8 +103,8 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
             local_addr=(self.settings['address'], self.settings['port']),
         )
         try:
-            while True:
-                await asyncio.sleep(60)
+            while self.running:
+                await asyncio.sleep(1)
         finally:
             try:
                 self.transport.close()
@@ -116,11 +119,13 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
         except KeyError:
             logger.warn('Missing HFDL Listener configuration, not starting one.')
         else:
+            self.running = True
             asyncio.get_running_loop().create_task(self.run(hfdl_consumers))
 
     def stop(self) -> None:
         if self.transport:
             self.transport.close()
+            self.running = False
 
     @property
     def listener(self) -> hfdl_observer.data.ListenerConfig:
@@ -129,3 +134,22 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
         config.address = self.settings['address']
         config.port = self.settings['port']
         return config
+
+    @functools.cached_property
+    def connection_info(self) -> dict:
+        address = self.settings['address']
+        if address == '0.0.0.0' or address == '*':
+            address = self.settings.get('external_address', None)
+            if not address:
+                logger.warning('attempting to discover a visible IP address. This may explode.')
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("254.254.254.254", 80))  # this address is in an unroutable and unusable space.
+                address = s.getsockname()[0]
+                s.close()
+                logger.warning(f'found {address}. Setting external_address is preferred.')
+        return {
+            'protocol': 'udp',
+            'address': address,
+            'port': self.settings['port'],
+        }

@@ -173,8 +173,9 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
             return True
         else:
             if a.frequencies != base.frequencies:
-                logger.info(f'{base.station_id} has updated frequencies? {a.frequencies} to {base.frequencies}')
-                if not a.frequencies:
+                if a.frequencies:
+                    logger.info(f'{base.station_id} has updated frequencies? {a.frequencies} to {base.frequencies}')
+                else:
                     a.frequencies = base.frequencies
             then = to_timestamp_or_none(base.valid_to)
             if a.valid_to != then:
@@ -244,7 +245,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
     def station(self, station_id: int, at: Optional[datetime.datetime] = None) -> Optional[network.StationAvailability]:
         return self._for_station(station_id, at=at)
 
-    def prune(self, _: Any) -> None:
+    def prune(self, _: Any = None) -> None:
         StationAvailability.prune()
 
 

@@ -7,21 +7,24 @@
 import asyncio
 import collections
 import collections.abc
+import datetime
 import functools
 import logging
 import random
 import uuid
 
-from typing import Any, Optional
+from typing import Any, Coroutine, Optional
 
 import hfdl_observer
 import hfdl_observer.bus as bus
 import hfdl_observer.data as data
 import hfdl_observer.manage
 import hfdl_observer.process
+import hfdl_observer.util as util
 
 import decoders
 import iqsources
+import settings
 
 
 logger = logging.getLogger(__name__)
@@ -36,21 +39,23 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     name: str
     tasks: list[asyncio.Task]
     conductor: Optional[str] = None
+    last_seen: datetime.datetime
     registered: bool = False
 
-    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
+    def __init__(self, name: str, config: collections.abc.MutableMapping) -> None:
         self.uuid = str(uuid.uuid4())
         self.config = config
         self.name = name
         self.logger = logger.getChild(self.name)
-        self.listener = listener
         self.frequencies = []
         self.tasks = []
+        self.last_seen = util.now()
         self.recipient_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
         self.recipient_subscriber.add_callback(self.on_remote_event)
         self.broadcast_subscriber = bus.REMOTE_BROKER.subscriber('/')
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('available'))
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('unavailable'))
+        self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
         super().__init__()
 
     def payload(self, **data: Any) -> dict:
@@ -66,50 +71,75 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         return f'@receiver+{self.name}'
 
     def on_remote_listen(self, payload: list[int]) -> None:
+        self.keepalive()
         asyncio.get_running_loop().create_task(self.listen(payload))
 
     def on_remote_registered(self, uuid: str) -> None:
+        self.keepalive()
         if uuid == self.uuid:
             self.registered = True
 
     def on_remote_deregistered(self, uuid: str) -> None:
+        self.keepalive()
         if uuid == self.uuid:
-            self.registered = False
+            self.deregistered()
 
-    def on_remote_ping(self, _: Any) -> None:
-        pass
+    def on_remote_ping(self, uuid: str) -> None:
+        if uuid == self.uuid:
+            self.keepalive()
+            bus.REMOTE_BROKER.publish(self.target, 'pong', self.payload())
 
     def on_remote_die(self, _: Any) -> None:
+        # self.keepalive()
         logger.warning(f'{self} received DIE order')
-        # self.kill()
-        # self.deregister()
+        self.deregister()
 
-    def on_remote_available(self, conductor: str) -> None:
+    def on_remote_available(self, payload: dict) -> None:
+        self.keepalive()
         if not self.registered:
-            self.register(conductor)
+            self.conductor = payload['name']
+            self.listener = data.ListenerConfig(payload['listener'])
+            self.register()
 
     def on_remote_unavailable(self, conductor: str) -> None:
-        self.registered = False
+        self.deregister()
 
     def on_observer_start(self) -> None:
         self.recipient_subscriber.start()
         self.broadcast_subscriber.start()
+        self.watchdog.start()
 
-    def register(self, conductor: str) -> None:
-        self.conductor = conductor
-        bus.REMOTE_BROKER.publish(conductor, 'register', self.payload(widths=self.observable_widths()))
+    def register(self) -> None:
+        if self.conductor is not None:
+            self.setup_harnesses()
+            bus.REMOTE_BROKER.publish(self.conductor, 'register', self.payload(widths=self.observable_widths()))
 
     def deregister(self) -> None:
         if self.conductor:
+            logger.info(f'{self} deregistering')
             bus.REMOTE_BROKER.publish(self.conductor, 'deregister', self.payload())
+            task = asyncio.get_running_loop().create_task(self.stop())
+            task.add_done_callback(self.deregistered)
 
-    @functools.cached_property
-    def proxy(self) -> hfdl_observer.manage.ReceiverProxy:
-        _proxy = hfdl_observer.manage.ReceiverProxy(self.name, self.uuid, self.observable_widths())
-        # _proxy.subscribe(f'receiver:{self.name}', self.on_remote_event)
-        # a bit presumptuous.
-        # self.subscribe(f'receiver:{self.name}', _proxy.on_remote_event)
-        return _proxy
+    def deregistered(self, _: Any = None) -> None:
+        self.registered = False
+        self.conductor = None
+
+    def setup_harnesses(self) -> None:
+        raise NotImplementedError(str(self.__class__))
+
+    def keepalive(self) -> None:
+        self.last_seen = util.now()
+
+    def heartbeat(self) -> None:
+        # called regularly. Should check to see if the (controlling) observer has been seen lately.
+        # If not... do something drastic.
+        # only need to care if we're registered!
+        if self.registered:
+            horizon = util.now() - datetime.timedelta(seconds=60)
+            if self.last_seen < horizon:
+                logger.warning(f'controller {self.conductor} may be dead. {self.last_seen}')
+                self.deregister()
 
     def covers(self, freqs: list[int]) -> bool:
         # in this implementation it must be exact.
@@ -162,12 +192,8 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
 class Web888Receiver(LocalReceiver):
     shell: bool = False
 
-    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
-        super().__init__(name, config, listener)
-        self.setup_harnesses()
-
-    def setup_harnesses(self) -> None:
-        raise NotImplementedError(str(self.__class__))
+    def __init__(self, name: str, config: collections.abc.MutableMapping) -> None:
+        super().__init__(name, config)
 
     def observable_widths(self) -> list[int]:
         return [12]  # hardcoded to the value that kiwisdr uses.
@@ -259,8 +285,7 @@ class DirectReceiver(LocalReceiver):
     observable_channel_widths: list[int]
     decoder: decoders.DirectDecoder
 
-    def __init__(self, name: str, config: collections.abc.MutableMapping, listener: data.ListenerConfig) -> None:
-        super().__init__(name, config, listener)
+    def setup_harnesses(self) -> None:
         decoder_type = self.config['decoder']['type']
         decoder_class = getattr(decoders, decoder_type)
         self.decoder = decoder_class(self.name, self.config.get('decoder', {}), self.listener)
@@ -272,7 +297,6 @@ class DirectReceiver(LocalReceiver):
     async def run(self) -> None:
         bus.REMOTE_BROKER.publish(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
         self.logger.info('queued')
-        # self.publish(f'receiver:{self.name}', ('listening', self.channel.frequencies))
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         decoder_task = await self.decoder.listen(self.channel)
         self.tasks.append(decoder_task)
@@ -286,7 +310,46 @@ class DirectReceiver(LocalReceiver):
     async def kill(self) -> None:
         self.logger.debug('Killing')
         self.tasks = []  # don't care about these tasks anymore
-        await self.decoder.kill()
+        if hasattr(self, 'decoder'):
+            await self.decoder.kill()
 
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
+
+
+class ReceiverNode():
+    local_receivers: list[LocalReceiver]
+
+    def __init__(self, config: collections.abc.Mapping) -> None:
+        self.config = config
+        self.local_receivers = []
+
+    def message_broker(self) -> bus.RemoteBroker:
+        raise NotImplementedError(self.__class__.__name__)
+
+    def build_local_receiver(self, receiver_name: str) -> LocalReceiver:
+        receiver_base = self.config['all_receivers'][receiver_name]
+        receiver_config = settings.flatten(receiver_base, 'receiver')
+        typename = receiver_config['type']
+        klass = globals()[typename]
+        receiver: LocalReceiver = klass(receiver_name, receiver_config)
+        receiver.subscribe('fatal', self.on_fatal_error)
+        self.local_receivers.append(receiver)
+        return receiver
+
+    def start(self) -> None:
+        logger.debug(f'starting {len(self.local_receivers)} local receivers')
+        for receiver in self.local_receivers:
+            receiver.on_observer_start()
+
+    def killables(self) -> list[Coroutine]:
+        outstanding = [receiver.kill() for receiver in self.local_receivers]
+        return outstanding
+
+    async def kill(self) -> None:
+        logger.warning(f'{self} killed')
+        await asyncio.gather(*self.killables())
+        logger.info(f'{self} tasks halted')
+
+    def on_fatal_error(self, _: Any) -> None:
+        pass

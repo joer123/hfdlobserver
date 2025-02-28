@@ -5,11 +5,14 @@
 #
 
 import asyncio
+import collections
+import collections.abc
 import datetime
 import functools
 import itertools
 import json
 import logging
+import uuid
 
 from typing import Any, Callable, Coroutine, Optional
 
@@ -74,10 +77,8 @@ class NetworkOverview(bus.LocalPublisher):
         loop = asyncio.get_running_loop()
         for startable in self.startables:
             self.tasks.append(loop.create_task(startable()))
-        # loop.create_task(url_watcher.run())
-        # loop.create_task(file_watcher.run())
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         for task in self.tasks:
             task.cancel()
 
@@ -121,13 +122,15 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     name: str
     uuid: str
     channel: Optional[data.ObservingChannel]
+    last_seen: datetime.datetime
+    pings_sent: int = 0
 
     def __init__(self, name: str, uuid: str, observable_widths: list[int]) -> None:
         self.name = name
         self.uuid = uuid
         self.observable_channel_widths = observable_widths
         self.channel = None
-        # other.subscribe(f'receiver:{self.name}', self.on_remote_event)
+        self.last_seen = util.now()
         self.direct_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
         self.direct_subscriber.add_callback(self.on_remote_event)
         self.direct_subscriber.start()
@@ -136,30 +139,26 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     def target(self) -> str:
         return f'@receiver+{self.name}'
 
-    # def connect(self, publisher: bus.LocalPublisher) -> None:
-    #     publisher.subscribe(f'receiver:{self.name}', self.on_local_event)
-
     def relay(self, subject: str, payload: Any) -> None:
         bus.REMOTE_BROKER.publish(self.target, subject, payload)
+
+    def keepalive(self) -> None:
+        self.pings_sent = 0
+        self.last_seen = util.now()
 
     def covers(self, channel: data.ObservingChannel) -> bool:
         return self.channel is not None and self.channel.covers(channel)
 
-    # def on_local_event(self, payload: tuple[str, Any]) -> None:
-    #     action, arg = payload
-    #     relayed = set(['listen', 'die', 'ping'])
-    #     if action in relayed:
-    #         self.relay(action, payload)
-
-    # def on_local_listen(self, payload: Any) -> None:
-    #     self.relay('listen', payload)
-
     def on_remote_listening(self, payload: dict) -> None:
         logger.info(f'{self} remote now listening to {len(payload["frequencies"])} frequencies')
+        self.keepalive()
         self.channel = self.observing_channel_for(payload['frequencies'])
 
+    def on_remote_pong(self, _: Any) -> None:
+        self.keepalive()
+
     def __str__(self) -> str:
-        return f'{self.name} on {self.channel}'
+        return f'{self.name} on {self.channel} ({self.last_seen})'
 
     def die(self) -> None:
         self.relay('die', self.uuid)
@@ -167,11 +166,20 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     def listen(self, freqs: list[int]) -> None:
         self.relay('listen', freqs)
 
+    def ping(self) -> None:
+        self.relay('ping', self.uuid)
+
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
 
+    def registered(self) -> None:
+        self.relay('registered', self.uuid)
 
-class AbstractConductor(bus.LocalPublisher, data.ChannelObserver):
+    def deregistered(self) -> None:
+        self.relay('deregistered', self.uuid)
+
+
+class AbstractOrchestrator(bus.LocalPublisher, data.ChannelObserver):
     ranked_station_ids: list[int]
     ignored_frequencies: list[tuple[int, int]]
     proxies: list[ReceiverProxy]
@@ -208,7 +216,7 @@ class AbstractConductor(bus.LocalPublisher, data.ChannelObserver):
                 receiver.die()
 
 
-class UniformConductor(AbstractConductor):
+class UniformOrchestrator(AbstractOrchestrator):
     def observable_widths(self) -> list[int]:
         widths: set[int] = set()
         for proxy in self.proxies:
@@ -317,7 +325,7 @@ class UniformConductor(AbstractConductor):
         return actual_channels
 
 
-class DiverseConductor(UniformConductor):
+class DiverseOrchestrator(UniformOrchestrator):
     def observable_widths(self) -> list[int]:
         width = 0
         for proxy in self.proxies:
@@ -408,3 +416,133 @@ class Reaper(bus.LocalPublisher):
         for freq, channel in self.channels.items():
             if 0 < self.last_seen.get(freq, 0) < horizon:
                 self.publish('dead-receiver', channel.frequencies)
+
+
+class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
+    proxies: dict[str, ReceiverProxy]
+    orchestration_task: None | asyncio.Handle = None
+    last_orchestrated: datetime.datetime
+    listener_info: dict
+
+    def __init__(self, config: collections.abc.Mapping) -> None:
+        super().__init__()
+        self.config = config
+        self.uuid = f'@{uuid.uuid4()}'
+        self.proxies = {}
+        self.conductor = DiverseOrchestrator(config['conductor'])
+        self.recipient_subscriber = self.message_broker().subscriber(self.uuid)
+        self.recipient_subscriber.add_callback(self.on_remote_event)
+        self.announcer = bus.PeriodicCallback(10, [self.announce], False)
+        self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
+        self.last_orchestrated = util.now()
+
+    def message_broker(self) -> bus.RemoteBroker:
+        raise NotImplementedError(self.__class__.__name__)
+
+    def announce(self) -> None:
+        self.message_broker().publish(
+            '/observer',
+            'available',
+            {
+                'name': self.uuid,
+                'listener': self.listener_info
+            }
+        )
+
+    def add_receiver_proxy(self, proxy: ReceiverProxy) -> None:
+        self.proxies[proxy.name] = (proxy)
+        self.conductor.add_receiver(proxy)
+        self.maybe_orchestrate()
+
+    def maybe_orchestrate(self) -> None:
+        delay = self.config.get('delay', 10)
+        next_orchestrate = self.last_orchestrated + datetime.timedelta(seconds=delay)
+        if next_orchestrate <= util.now():
+            self.orchestration_task = asyncio.get_running_loop().call_soon(self.orchestrate)
+        elif self.orchestration_task is None:
+            self.orchestration_task = asyncio.get_running_loop().call_later(delay, self.maybe_orchestrate)
+
+    def orchestrate(self) -> None:
+        targetted_freqs = network.STATIONS.active()
+        chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
+        self.last_orchestrated = util.now()
+        self.orchestration_task = None
+
+        targetted = []
+        untargetted = []
+        for channel in chosen_channels:
+            for frequency in channel.frequencies:
+                if network.STATIONS.is_active(frequency):
+                    targetted.append(frequency)
+                else:
+                    untargetted.append(frequency)
+
+        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
+        self.publish('orchestrated', {
+            'targetted': targetted,
+            'untargetted': untargetted,
+            'active': all_active,
+        })
+
+        self.publish('active', all_active)
+        self.publish('observing', (targetted, untargetted))
+        self.publish('frequencies', targetted_freqs)
+
+    def killables(self) -> list[Coroutine]:
+        outstanding = [
+            self.announcer.stop(),
+            self.watchdog.stop(),
+            self.recipient_subscriber.stop(),
+        ]
+        return outstanding
+
+    async def kill(self) -> None:
+        logger.warning(f'{self} killed')
+        await asyncio.gather(*self.killables())
+        logger.info(f'{self} tasks halted')
+
+    def heartbeat(self) -> None:
+        horizon = util.now() - datetime.timedelta(seconds=600)
+        for name, proxy in self.proxies.items():
+            if proxy.last_seen < horizon:
+                if proxy.pings_sent > 3:
+                    logger.warning(f'proxy {name}:{proxy} may be dead.')
+                else:
+                    proxy.ping()
+
+    def start(self) -> None:
+        self.recipient_subscriber.start()
+        self.announcer.start()
+        self.watchdog.start()
+        # reaper is currently not used: self.conductor.reaper.start()
+
+    def on_remote_register(self, payload: dict) -> None:
+        name = payload['name']
+        uuid = payload['uuid']
+        try:
+            old_proxy = self.proxies[name]
+        except KeyError:
+            pass
+        else:
+            if old_proxy.uuid != uuid:
+                self.message_broker().publish(old_proxy.target, 'deregister', old_proxy.uuid)
+                self.conductor.remove_receiver(old_proxy)
+                del self.proxies[name]
+        proxy = ReceiverProxy(name, uuid, payload['widths'])
+        self.add_receiver_proxy(proxy)
+        proxy.registered()
+
+    def on_remote_deregister(self, payload: dict) -> None:
+        name = payload['name']
+        try:
+            proxy = self.proxies[name]
+        except KeyError:
+            pass
+        else:
+            if proxy.uuid == payload['uuid']:
+                self.conductor.remove_receiver(proxy)
+                del self.proxies[name]
+        proxy.deregistered()
+
+    def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
+        self.maybe_orchestrate()

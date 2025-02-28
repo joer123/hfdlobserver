@@ -9,7 +9,6 @@ import asyncio
 import asyncio.protocols
 import collections
 import collections.abc
-import itertools
 import logging
 import logging.handlers
 import pathlib
@@ -40,50 +39,54 @@ logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if _
 TRACEMALLOC = False
 
 
-class HFDLObserverNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
-    local_receivers: list[receivers.LocalReceiver]
-    proxies: dict[str, manage.ReceiverProxy]
-    running: bool = True
+class HFDLObserverNode(receivers.ReceiverNode):
+    def __init__(self, config: collections.abc.Mapping) -> None:
+        super().__init__(config)
 
-    availability_watcher: orm.NetworkUpdater
+        for receiver_name in config['local_receivers']:
+            self.build_local_receiver(receiver_name)
+
+    def start(self) -> None:
+        self.running = True
+        super().start()
+
+    def on_fatal_error(self, data: tuple[str, str]) -> None:
+        receiver, error = data
+        logger.error(f'Bailing due to error on receiver {receiver}: {error}')
+        self.running = False
+
+    def message_broker(self) -> bus.RemoteBroker:
+        return bus.REMOTE_BROKER
+
+
+class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
+    running: bool = True
     packet_watcher: orm.PacketWatcher
 
     def __init__(self, config: collections.abc.Mapping) -> None:
-        super().__init__()
-        self.config = config
-        self.network_updater = orm.NetworkUpdater()
-        network.UPDATER = self.network_updater
+        manage.ConductorNode.__init__(self, config)
+        receivers.ReceiverNode.__init__(self, config)
         self.packet_watcher = orm.PacketWatcher()
         hfdl_observer.data.PACKET_WATCHER = self.packet_watcher
-        self.network_overview = manage.NetworkOverview(config['tracker'], self.network_updater)
-        self.network_overview.subscribe('state', self.network_updater.prune)
+        self.network_overview = manage.NetworkOverview(config['tracker'], network.UPDATER)
+        self.network_overview.subscribe('state', network.UPDATER.prune)
+        self.network_overview.subscribe('frequencies', self.on_frequencies)
 
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
         self.hfdl_consumers = [
             hfdl_observer.listeners.HFDLPacketConsumer(
                 [hfdl_observer.listeners.HFDLPacketConsumer.any_in('spdu', 'freq_data')],
-                [self.network_updater.on_hfdl],
+                [network.UPDATER.on_hfdl],
             ),
             hfdl_observer.listeners.HFDLPacketConsumer(
                 [lambda line: True],
                 [self.on_hfdl, self.packet_watcher.on_hfdl],
             ),
         ]
-        self.local_receivers = []
+        self.listener_info = self.hfdl_listener.connection_info
 
-        for rname in config['local_receivers']:
-            self.build_local_receiver(rname)
-
-    def build_local_receiver(self, receiver_name: str) -> receivers.LocalReceiver:
-        receiver_base = self.config['all_receivers'][receiver_name]
-        receiver_config = settings.flatten(receiver_base, 'receiver')
-        typename = receiver_config['type']
-        klass = getattr(receivers, typename)
-        receiver: receivers.LocalReceiver = klass(receiver_name, receiver_config, self.hfdl_listener.listener)
-        receiver.subscribe('fatal', self.on_fatal_error)
-        self.local_receivers.append(receiver)
-        # LocalReceivers should register through Zero: self.add_receiver_proxy(receiver.proxy)
-        return receiver
+        for receiver_name in config['local_receivers']:
+            self.build_local_receiver(receiver_name)
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         self.publish('packet', packet)
@@ -93,119 +96,39 @@ class HFDLObserverNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         logger.error(f'Bailing due to error on receiver {receiver}: {error}')
         self.running = False
 
-    def ministats(self, _: Any) -> None:
-        table = hfdl_observer.heat.TableByFrequency(60, 10)
-        for line in str(table).split('\n'):
-            logger.info(f'{line}')
-
     def start(self) -> None:
-        for receiver in self.local_receivers:
-            receiver.on_observer_start()
+        self.running = True
+        manage.ConductorNode.start(self)
+        receivers.ReceiverNode.start(self)
         self.packet_watcher.prune_every(60)
         self.network_overview.start()
         self.hfdl_listener.start(self.hfdl_consumers)
 
     def killables(self) -> list[Coroutine]:
         outstanding = [
-            self.packet_watcher.stop_pruning()
+            self.packet_watcher.stop_pruning(),
+            self.network_overview.stop(),
         ]
-        outstanding.extend(receiver.kill() for receiver in self.local_receivers)
+        outstanding.extend(receivers.ReceiverNode.killables(self))
+        outstanding.extend(manage.ConductorNode.killables(self))
         return outstanding
 
     async def kill(self) -> None:
         logger.warning(f'{self} killed')
-        self.network_overview.stop()
         self.hfdl_listener.stop()
         await asyncio.gather(*self.killables())
         logger.info(f'{self} tasks halted')
 
+    def message_broker(self) -> bus.RemoteBroker:
+        return bus.REMOTE_BROKER
 
-class HFDLObserver(HFDLObserverNode):
-    def __init__(self, config: collections.abc.Mapping) -> None:
-        self.proxies = {}
-        super().__init__(config)
-        self.network_overview.subscribe('frequencies', self.on_frequencies)
-        self.conductor = manage.DiverseConductor(config['conductor'])
-        self.recipient_subscriber = bus.REMOTE_BROKER.subscriber('@observer')
-        self.recipient_subscriber.add_callback(self.on_remote_event)
-        self.announcer = bus.PeriodicCallback(10, [self.announce], False)
-
-    def announce(self) -> None:
-        bus.REMOTE_BROKER.publish('/observer', 'available', '@observer')
-
-    def add_receiver_proxy(self, proxy: manage.ReceiverProxy) -> None:
-        # proxy.connect(self.conductor)
-        self.proxies[proxy.name] = (proxy)
-        self.conductor.add_receiver(proxy)
-
-    def on_remote_register(self, payload: dict) -> None:
-        name = payload['name']
-        uuid = payload['uuid']
-        try:
-            old_proxy = self.proxies[name]
-        except KeyError:
-            pass
-        else:
-            if old_proxy.uuid != uuid:
-                bus.REMOTE_BROKER.publish(old_proxy.target, 'deregister', old_proxy.uuid)
-                self.conductor.remove_receiver(old_proxy)
-                del self.proxies[name]
-        proxy = manage.ReceiverProxy(name, uuid, payload['widths'])
-        self.add_receiver_proxy(proxy)
-        proxy.relay('registered', proxy.uuid)
-
-    def on_remote_deregister(self, payload: dict) -> None:
-        name = payload['name']
-        try:
-            proxy = self.proxies[name]
-        except KeyError:
-            pass
-        else:
-            if proxy.uuid == payload['uuid']:
-                self.conductor.remove_receiver(proxy)
-                del self.proxies[name]
-        proxy.relay('deregistered', proxy.uuid)
-
-    def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
-        chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
-
-        targetted = []
-        untargetted = []
-        for channel in chosen_channels:
-            for frequency in channel.frequencies:
-                if network.STATIONS.is_active(frequency):
-                    targetted.append(frequency)
-                else:
-                    untargetted.append(frequency)
-
-        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
-        self.publish('orchestrated', {
-            'targetted': targetted,
-            'untargetted': untargetted,
-            'active': all_active,
-        })
-
-        self.publish('active', all_active)
-        self.publish('observing', (targetted, untargetted))
-        self.publish('frequencies', targetted_freqs)
-
-    def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
-        super().on_hfdl(packet)
-        # reaper is currently not used: self.conductor.reaper.on_hfdl(packet)
-
-    def start(self) -> None:
-        super().start()
-        self.recipient_subscriber.start()
-        self.announcer.start()
-        # reaper is currently not used: self.conductor.reaper.start()
-
-    def killables(self) -> list[Coroutine]:
-        outstanding = super().killables()
-        outstanding.append(self.announcer.stop())
-        return outstanding
+    def ministats(self, _: Any) -> None:
+        table = hfdl_observer.heat.TableByFrequency(60, 10)
+        for line in str(table).split('\n'):
+            logger.info(f'{line}')
 
 
-async def async_observe(observer: HFDLObserver) -> None:
+async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> None:
     logger.info("Starting observer")
 
     if TRACEMALLOC:
@@ -247,35 +170,44 @@ def cancel_all_tasks() -> None:
 
 def observe(
     on_observer: Optional[Callable[[
-        HFDLObserver,
+        HFDLObserverController,
         network.CumulativePacketStats
-    ], None]] = None
+    ], None]] = None,
+    as_controller: bool = True
 ) -> None:
     loop = asyncio.get_event_loop()
+    key = 'observer' if as_controller else 'node'
+    broker_config = settings.registry[key].get('messaging', {})
+    remote_broker = bus.RemoteBroker(broker_config)
+    bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...
 
-    message_broker = zero.ZeroBroker()
-    message_broker.start()  # daemon thread, not async.
-    remote_broker = bus.RemoteBroker(settings.registry.get('messaging', {}))
-    bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...w
-
-    observer = HFDLObserver(settings.registry['observer'])
-
-    cumulative = network.CumulativePacketStats()
-    observer.subscribe('packet', cumulative.on_hfdl)
-
-    if on_observer:
-        on_observer(observer, cumulative)
-    else:
-        # initialize headless
-        observer.network_overview.subscribe('state', observer.ministats)
+    observer: HFDLObserverController | HFDLObserverNode
+    if as_controller:
+        message_broker = zero.ZeroBroker(**broker_config)
+        message_broker.start()  # daemon thread, not async.
+        network.UPDATER = orm.NetworkUpdater()
+        observer = HFDLObserverController(settings.registry[key])
+        cumulative = network.CumulativePacketStats()
+        observer.subscribe('packet', cumulative.on_hfdl)
+        if on_observer:
+            on_observer(observer, cumulative)
+        else:
+            # initialize headless
+            observer.network_overview.subscribe('state', observer.ministats)
+    else:  # just a node for receivers.
+        observer = HFDLObserverNode(settings.registry[key])
 
     main_task = asyncio.ensure_future(async_observe(observer))
     for signal in [SIGINT, SIGTERM]:
         loop.add_signal_handler(signal, cancel_all_tasks)
     try:
         loop.run_until_complete(main_task)
+        logger.info("HFDLObserver done.")
+    except Exception as exc:
+        logger.error("Fatal error encountered", exc_info=exc)
+        raise
     finally:
-        logger.info('Observer loop closing')
+        logger.info('HFDLObserver loop closing')
         cancel_all_tasks()
         loop.close()
         sys.exit()
@@ -296,6 +228,7 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
 @click.command
 @click.option('--headless', help='Run headless; with no CUI.', is_flag=True)
 @click.option('--debug', help='Output debug/extra information.', is_flag=True)
+@click.option('--node', help='run as node only to connect with a remote Observer (implies headless)', is_flag=True)
 @click.option(
     '--log',
     help='log output to this file',
@@ -317,16 +250,17 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
         exists=True,
     ), default=None,
 )
-def command(headless: bool, debug: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]) -> None:
-
+def command(
+    headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]
+) -> None:
     settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     handler = logging.handlers.TimedRotatingFileHandler(log, when='d', interval=1) if log else None
 
     # if not executed in a tty-like thing, headless is forced.
-    headless = headless or not sys.stdout.isatty()
+    headless = headless or node or not sys.stdout.isatty()
     if headless:
         setup_logging(handler, debug)
-        observe()
+        observe(as_controller=not node)
     else:
         import cui
         cui.screen(handler, debug)
