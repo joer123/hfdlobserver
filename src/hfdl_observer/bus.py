@@ -28,7 +28,6 @@ class RemoteSubscriber(zero.ZeroSubscriber):
     task: asyncio.Task
 
     def start(self) -> asyncio.Task:
-        # logger.info(f'starting {self.url}/{self.channel}')
         self.task = asyncio.get_running_loop().create_task(self.run())
         return self.task
 
@@ -36,8 +35,8 @@ class RemoteSubscriber(zero.ZeroSubscriber):
 class RemoteBroker:
     def __init__(self, config: dict) -> None:
         self.host = config.get('host', 'localhost')
-        self.pub_port = config.get('pub_port', 5560)
-        self.sub_port = config.get('sub_port', 5559)
+        self.pub_port = config.get('pub_port', 5559)
+        self.sub_port = config.get('sub_port', 5560)
         self.context = zero.GLOBAL_CONTEXT
         self._publisher = self.publisher()
 
@@ -63,10 +62,10 @@ class GenericRemoteEventDispatcher:
     def on_remote_event(self, subject: str, payload: Any) -> None:
         handler = getattr(self, f'on_remote_{subject.strip()}', None)
         if callable(handler):
-            # logger.info(f'dispatching {subject} via {handler}')
+            # logger.debug(f'dispatching {subject} via {handler}')
             handler(payload)
         else:
-            logger.info(f'ignoring on_remote_{subject.strip()}')
+            logger.debug(f'ignoring on_remote_{subject.strip()}')
 
 
 REMOTE_BROKER: RemoteBroker
@@ -137,7 +136,7 @@ class PeriodicTask():
         self.prepare()
         while self.enabled:
             if self.chatty:
-                logger.info(f'{self} executing')
+                logger.debug(f'{self} executing')
             await self.execute()
             await asyncio.sleep(self.period)
 
@@ -162,6 +161,9 @@ class PeriodicCallback(PeriodicTask):
         for callback in self.callbacks:
             if callable(callback):
                 callback()
+
+    def __str__(self) -> str:
+        return f'<PeriodicCallback@{self.period} [{";".join(str(c) for c in self.callbacks)}]>'
 
 
 class RemoteURLRefresher(PeriodicTask, LocalPublisher):

@@ -677,7 +677,8 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         observer: hfdlobserver.HFDLObserverController,
         cumulative: network.CumulativePacketStats,
     ) -> None:
-        ticker.register(observer)  # , packet_counter)
+        ticker.register(observer)
+        cumulative_line.register(observer, cumulative)
         asyncio.get_event_loop().create_task(forecaster.run())
         asyncio.get_event_loop().create_task(display_updater.run())
 

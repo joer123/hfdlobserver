@@ -55,7 +55,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         self.broadcast_subscriber = bus.REMOTE_BROKER.subscriber('/')
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('available'))
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda t: t.startswith('unavailable'))
-        self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
+        self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=True)
         super().__init__()
 
     def payload(self, **data: Any) -> dict:
