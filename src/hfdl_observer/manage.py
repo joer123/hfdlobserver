@@ -140,21 +140,22 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         return f'@receiver+{self.name}'
 
     def relay(self, subject: str, payload: Any) -> None:
-        bus.REMOTE_BROKER.publish(self.target, subject, payload)
+        bus.REMOTE_BROKER.publish(bus.Message(self.target, subject, payload))
 
     def keepalive(self) -> None:
         self.pings_sent = 0
         self.last_seen = util.now()
 
     def covers(self, channel: data.ObservingChannel) -> bool:
-        return self.channel is not None and self.channel.covers(channel)
+        return self.channel is not None and self.channel.matches(channel)
 
-    def on_remote_listening(self, payload: dict) -> None:
+    def on_remote_listening(self, message: bus.Message) -> None:
+        payload: dict = message.payload
         logger.info(f'{self} remote now listening to {len(payload["frequencies"])} frequencies')
         self.keepalive()
         self.channel = self.observing_channel_for(payload['frequencies'])
 
-    def on_remote_pong(self, _: Any) -> None:
+    def on_remote_pong(self, _: bus.Message) -> None:
         self.keepalive()
 
     def __str__(self) -> str:
@@ -275,25 +276,27 @@ class UniformOrchestrator(AbstractOrchestrator):
         keeps = {}
         starts: list[data.ObservingChannel] = []
         proxies_by_width = sorted(self.proxies, key=lambda p: max(p.observable_widths()), reverse=True)
+        available = proxies_by_width.copy()
         for channel in channels:
             for receiver in proxies_by_width:
                 if receiver.covers(channel):
+                    logger.debug(f'keeping {receiver}')
                     keeps[receiver.name] = channel
+                    available.remove(receiver)
                     break
             else:
                 logger.debug(f'adding {channel} to starts')
                 starts.append(channel)
 
-        available: list[ReceiverProxy] = []
-        for receiver in proxies_by_width:
-            if receiver.name in keeps:
-                channel = keeps[receiver.name]
-                logger.debug(f'keeping {receiver}')
-            else:
-                logger.debug(f'marking {receiver} available')
-                available.append(receiver)
+        # available: list[ReceiverProxy] = []
+        # for receiver in proxies_by_width:
+        #     if receiver.name in keeps:
+        #         logger.debug(f'keeping {receiver}')
+        #     else:
+        #         logger.debug(f'marking {receiver} available')
+        #         available.append(receiver)
+        # available.sort(key=lambda a: max(a.observable_widths()))
 
-        available.sort(key=lambda a: max(a.observable_widths()))
         for channel in starts:
             for receiver in available:
                 if max(receiver.observable_widths()) >= channel.width:
@@ -433,21 +436,21 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.recipient_subscriber = self.message_broker().subscriber(self.uuid)
         self.recipient_subscriber.add_callback(self.on_remote_event)
         self.announcer = bus.PeriodicCallback(10, [self.announce], False)
-        self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
+        self.watchdog = bus.PeriodicCallback(30, [self.heartbeat], chatty=False)
         self.last_orchestrated = util.now()
 
     def message_broker(self) -> bus.RemoteBroker:
         raise NotImplementedError(self.__class__.__name__)
 
     def announce(self) -> None:
-        self.message_broker().publish(
+        self.message_broker().publish(bus.Message(
             '/observer',
             'available',
             {
                 'name': self.uuid,
                 'listener': self.listener_info
             }
-        )
+        ))
 
     def add_receiver_proxy(self, proxy: ReceiverProxy) -> None:
         self.proxies[proxy.name] = (proxy)
@@ -457,10 +460,11 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
     def maybe_orchestrate(self) -> None:
         delay = self.config.get('delay', 10)
         next_orchestrate = self.last_orchestrated + datetime.timedelta(seconds=delay)
-        if next_orchestrate <= util.now():
-            self.orchestration_task = asyncio.get_running_loop().call_soon(self.orchestrate)
-        elif self.orchestration_task is None:
-            self.orchestration_task = asyncio.get_running_loop().call_later(delay, self.maybe_orchestrate)
+        if self.orchestration_task is None:
+            if next_orchestrate <= util.now():
+                self.orchestration_task = asyncio.get_running_loop().call_soon(self.orchestrate)
+            else:
+                self.orchestration_task = asyncio.get_running_loop().call_later(delay, self.maybe_orchestrate)
 
     def orchestrate(self) -> None:
         targetted_freqs = network.STATIONS.active()
@@ -502,11 +506,12 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         logger.info(f'{self} tasks halted')
 
     def heartbeat(self) -> None:
-        horizon = util.now() - datetime.timedelta(seconds=600)
+        horizon = util.now() - datetime.timedelta(seconds=100)
         for name, proxy in self.proxies.items():
             if proxy.last_seen < horizon:
                 if proxy.pings_sent > 3:
                     logger.warning(f'proxy {name}:{proxy} may be dead.')
+
                 else:
                     proxy.ping()
 
@@ -516,33 +521,38 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.watchdog.start()
         # reaper is currently not used: self.conductor.reaper.start()
 
-    def on_remote_register(self, payload: dict) -> None:
-        name = payload['name']
-        uuid = payload['uuid']
+    def register_remote(self, name: str, uuid: str, widths: list[int]) -> None:
         try:
             old_proxy = self.proxies[name]
         except KeyError:
             pass
         else:
             if old_proxy.uuid != uuid:
-                self.message_broker().publish(old_proxy.target, 'deregister', old_proxy.uuid)
+                self.message_broker().publish(bus.Message(old_proxy.target, 'deregister', old_proxy.uuid))
                 self.conductor.remove_receiver(old_proxy)
                 del self.proxies[name]
-        proxy = ReceiverProxy(name, uuid, payload['widths'])
+        proxy = ReceiverProxy(name, uuid, widths)
         self.add_receiver_proxy(proxy)
         proxy.registered()
 
-    def on_remote_deregister(self, payload: dict) -> None:
-        name = payload['name']
+    def deregister_remote(self, name: str, uuid: str) -> None:
         try:
             proxy = self.proxies[name]
         except KeyError:
             pass
         else:
-            if proxy.uuid == payload['uuid']:
+            if proxy.uuid == uuid:
                 self.conductor.remove_receiver(proxy)
                 del self.proxies[name]
-        proxy.deregistered()
+            proxy.deregistered()
+
+    def on_remote_register(self, message: bus.Message) -> None:
+        payload: dict = message.payload
+        self.register_remote(payload['name'], payload['uuid'], payload['widths'])
+
+    def on_remote_deregister(self, message: bus.Message) -> None:
+        payload: dict = message.payload
+        self.deregister_remote(payload['name'], payload['uuid'])
 
     def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
         self.maybe_orchestrate()

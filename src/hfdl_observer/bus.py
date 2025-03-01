@@ -16,7 +16,7 @@ import requests
 
 import hfdl_observer.zero as zero
 
-
+Message = zero.Message
 logger = logging.getLogger(__name__)
 
 
@@ -49,23 +49,23 @@ class RemoteBroker:
         logger.debug(f'publisher {self.host}:{self.pub_port}')
         return RemotePublisher(self.host, self.pub_port, context=self.context)
 
-    def publish(self, target: str, subject: str, payload: Any) -> None:
-        logger.debug(f'queuing {target} {subject}')
-        asyncio.get_running_loop().create_task(self._publisher.publish(target, subject, payload))
+    def publish(self, message: Message) -> None:
+        logger.debug(f'queuing {message}')
+        asyncio.get_running_loop().create_task(self._publisher.publish(message))
 
-    async def publish_now(self, target: str, subject: str, payload: Any) -> None:
-        logger.debug(f'pushing {target} {subject}')
-        await self._publisher.publish(target, subject, payload)
+    async def publish_now(self, message: Message) -> None:
+        logger.debug(f'pushing {message}')
+        await self._publisher.publish(message)
 
 
 class GenericRemoteEventDispatcher:
-    def on_remote_event(self, subject: str, payload: Any) -> None:
-        handler = getattr(self, f'on_remote_{subject.strip()}', None)
+    def on_remote_event(self, message: Message) -> None:
+        handler = getattr(self, f'on_remote_{message.subject.strip()}', None)
         if callable(handler):
             # logger.debug(f'dispatching {subject} via {handler}')
-            handler(payload)
+            handler(message)
         else:
-            logger.debug(f'ignoring on_remote_{subject.strip()}')
+            logger.debug(f'ignoring on_remote_{message.subject.strip()}')
 
 
 REMOTE_BROKER: RemoteBroker

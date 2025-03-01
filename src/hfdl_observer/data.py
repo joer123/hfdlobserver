@@ -81,7 +81,7 @@ class ObservingChannel:
     def clone(self) -> 'ObservingChannel':
         return ObservingChannel(self.allowed_width, self.frequencies)
 
-    def covers(self, other: 'ObservingChannel') -> bool:
+    def matches(self, other: 'ObservingChannel') -> bool:
         return other is not None and self._frequencies == other._frequencies
 
     def __str__(self) -> str:

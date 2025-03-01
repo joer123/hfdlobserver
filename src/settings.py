@@ -211,10 +211,11 @@ registry: dict[str, dict] = {
                     'driver': 'SDDC'
                 },
                 'sample-rates': [2000000, 4000000, 8000000],
-                'gain-elements': {
-                    'IF': '32',
-                    'RF': '0',
-                },
+                'gain': 89,  # 0 - 89.2239
+                # 'gain-elements': {
+                #     'IF': '32',  # -24.583 - 33.1409
+                #     'RF': '0',  # -31.5 - 0.0
+                # },
             }
         },
         'client': {

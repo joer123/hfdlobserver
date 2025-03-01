@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import logging
 import threading
@@ -46,10 +47,27 @@ class ZeroBroker:
             self.thread.start()
 
 
+@dataclasses.dataclass
+class Message:
+    target: str
+    subject: str
+    payload: Any
+
+    def __str(self) -> str:
+        body: str
+        if isinstance(self.payload, str):
+            body = self.payload
+        else:
+            body = self.payload.__class__.__name__
+            if hasattr(self.payload, '__len__'):
+                body = f'{body} l={len(self.payload)}'
+        return f'<Message: t={self.target} s={self.subject} b={body}>'
+
+
 class ZeroSubscriber:
     url: str
     channel: str
-    callbacks: list[tuple[Optional[Callable[[str], bool]], Callable[[str, Any], None]]]
+    callbacks: list[tuple[Optional[Callable[[Message], bool]], Callable[[Message], None]]]
     context: Context
     socket: Optional[zmq.Socket] = None
 
@@ -60,7 +78,7 @@ class ZeroSubscriber:
         self.url = url
 
     def add_callback(
-        self, callback: Callable[[str, Any], None], filter: Optional[Callable[[str], bool]] = None
+        self, callback: Callable[[Message], None], filter: Optional[Callable[[Message], bool]] = None
     ) -> None:
         self.callbacks.append((filter, callback))
 
@@ -75,14 +93,15 @@ class ZeroSubscriber:
 
         try:
             while self.running:
-                message = await self.socket.recv_multipart()
-                header, body = message
+                parts = await self.socket.recv_multipart()
+                header, body = parts
                 payload = json.loads(body.decode())
                 target, subject = header.decode().split('|', 1)
-                logger.debug(f'received {target} {subject} {len(body)}')
+                message = Message(target=target, subject=subject, payload=payload)
+                logger.debug(f'received {message}')
                 for filter, callback in self.callbacks:
-                    if not filter or filter(subject):
-                        asyncio.get_running_loop().call_soon(callback, subject, payload)
+                    if not filter or filter(message):
+                        asyncio.get_running_loop().call_soon(callback, message)
         finally:
             # logger.info(f'no longer subscribed to {self.url}/{self.channel}')
             self.socket.setsockopt(zmq.LINGER, 0)
@@ -115,19 +134,19 @@ class ZeroPublisher:
             self.socket.close()
             self.socket = None
 
-    async def publish(self, target: str, subject: str, payload: Any) -> None:
-        await self._publish(f'{target}|{subject}', json.dumps(payload))
+    async def publish(self, message: Message) -> None:
+        await self._publish(f'{message.target}|{message.subject}', json.dumps(message.payload))
 
     async def multi_publish(self, targets: list[str], subject: str, payload: Any) -> None:
         json_payload = json.dumps(payload)
         await asyncio.gather(*[self._publish(f'{target}|{subject}', json_payload) for target in targets])
 
     async def _publish(self, channel: str, payload: str) -> None:
-        encoded_channel = channel.encode()  # + b'\0'
+        encoded_channel = channel.encode()
         encoded_payload = payload.encode()
         if self.socket is None:
             # logger.info('publisher not connected')
             self.start()
         if self.socket is not None:
-            logger.debug(f'publish {channel} {len(encoded_payload)}')
+            logger.debug(f'publish c={channel} l={len(encoded_payload)}')
             await self.socket.send_multipart([encoded_channel, encoded_payload])

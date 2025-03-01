@@ -13,7 +13,7 @@ import logging
 
 from typing import Any, Mapping, Optional, Sequence
 
-import pony.orm as pony
+import pony.orm
 
 import hfdl_observer.bus as bus
 import hfdl_observer.hfdl as hfdl
@@ -24,7 +24,7 @@ import hfdl_observer.util as util
 
 logger = logging.getLogger(__name__)
 
-db = pony.Database()
+db = pony.orm.Database()
 db.bind(provider='sqlite', filename=':memory:')
 
 
@@ -52,7 +52,7 @@ def to_timestamp_or_none(when: None | datetime.datetime) -> int | None:
 
 
 @functools.cache
-@pony.db_session(strict=True)
+@pony.orm.db_session(strict=True)
 def pagesize() -> int:
     return int(db.execute("PRAGMA page_size;").fetchone()[0])
 
@@ -65,16 +65,16 @@ DbEntity = db.Entity
 
 
 class StationAvailability(DbEntity):  # type: ignore
-    station_id = pony.Required(int)
-    stratum = pony.Required(int)
-    valid_at = pony.Required(int, size=64)
-    valid_to = pony.Optional(int, size=64)
-    frequencies = pony.Required(pony.IntArray)
-    agent = pony.Required(str)
-    from_station = pony.Optional(int)
+    station_id = pony.orm.Required(int)
+    stratum = pony.orm.Required(int)
+    valid_at = pony.orm.Required(int, size=64)
+    valid_to = pony.orm.Optional(int, size=64)
+    frequencies = pony.orm.Required(pony.orm.IntArray)
+    agent = pony.orm.Required(str)
+    from_station = pony.orm.Optional(int)
     # SELECT * from Availability where sid = ? and valid_to > NOW order by stratum desc, valid_at desc
-    pony.PrimaryKey(station_id, stratum, valid_at)
-    pony.composite_index(station_id, stratum, valid_at, valid_to)
+    pony.orm.PrimaryKey(station_id, stratum, valid_at)
+    pony.orm.composite_index(station_id, stratum, valid_at, valid_to)
 
     def as_local(self) -> network.StationAvailability:
         d = self.to_dict()
@@ -83,29 +83,29 @@ class StationAvailability(DbEntity):  # type: ignore
         return network.StationAvailability(**d)
 
     @classmethod
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def prune(cls) -> None:
-        before_prune = pony.count(a for a in StationAvailability)
+        before_prune = pony.orm.count(a for a in StationAvailability)
         horizon = to_timestamp(util.now() - datetime.timedelta(days=1))
-        pony.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
+        pony.orm.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
         pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
         # logger.debug(f'DB size is {pages * pagesize()}')
-        after_prune = pony.count(a for a in StationAvailability)
+        after_prune = pony.orm.count(a for a in StationAvailability)
         if after_prune < before_prune:
             logger.info(f'pruned {before_prune - after_prune} StationAvailability records ({pages} db pages used)')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
-    when = pony.Required(int, size=64)
-    agent = pony.Required(str)
-    ground_station = pony.Required(int)
-    frequency = pony.Required(int)
-    kind = pony.Optional(str)
-    uplink = pony.Required(bool)
-    latitude = pony.Optional(float)
-    longitude = pony.Optional(float)
+    when = pony.orm.Required(int, size=64)
+    agent = pony.orm.Required(str)
+    ground_station = pony.orm.Required(int)
+    frequency = pony.orm.Required(int)
+    kind = pony.orm.Optional(str)
+    uplink = pony.orm.Required(bool)
+    latitude = pony.orm.Optional(float)
+    longitude = pony.orm.Optional(float)
     # select when // 60, frequency, count(*) from ReceivedPacket where when > ? group by when // 60, frequency
-    pony.PrimaryKey(when, frequency)
+    pony.orm.PrimaryKey(when, frequency)
 
     def as_local(self) -> data.ReceivedPacket:
         d = self.to_dict()
@@ -113,16 +113,16 @@ class ReceivedPacket(DbEntity):  # type: ignore
         return data.ReceivedPacket(**d)
 
     @classmethod
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         try:
-            before_prune = pony.count(r for r in ReceivedPacket)
+            before_prune = pony.orm.count(r for r in ReceivedPacket)
             horizon = to_timestamp(before)
             # initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
-            pony.delete(p for p in ReceivedPacket if p.when < horizon)
+            pony.orm.delete(p for p in ReceivedPacket if p.when < horizon)
             after = int(db.execute("PRAGMA page_count;").fetchone()[0])
             # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
-            after_prune = pony.count(r for r in ReceivedPacket)
+            after_prune = pony.orm.count(r for r in ReceivedPacket)
             if after_prune < before_prune:
                 logger.info(f'pruned {before_prune - after_prune} ReceivedPacket records ({after} db pages used)')
         except Exception as err:
@@ -131,13 +131,13 @@ class ReceivedPacket(DbEntity):  # type: ignore
 
 # Not currently used
 class FrequencyWatch(DbEntity):  # type: ignore
-    sequence = pony.PrimaryKey(int, auto=True)
-    started = pony.Required(int, size=64)
-    ended = pony.Optional(int, size=64)
-    station_id = pony.Required(int)
-    frequency = pony.Required(int)
-    is_targetted = pony.Required(bool)
-    observer_id = pony.Optional(str)
+    sequence = pony.orm.PrimaryKey(int, auto=True)
+    started = pony.orm.Required(int, size=64)
+    ended = pony.orm.Optional(int, size=64)
+    station_id = pony.orm.Required(int)
+    frequency = pony.orm.Required(int)
+    is_targetted = pony.orm.Required(bool)
+    observer_id = pony.orm.Optional(str)
 
     def as_local(self) -> data.FrequencyWatch:
         d = self.to_dict()
@@ -146,10 +146,10 @@ class FrequencyWatch(DbEntity):  # type: ignore
         return data.FrequencyWatch(**self.to_dict())
 
     @classmethod
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         horizon = to_timestamp(before)
-        pony.delete(p for p in cls if p.ended < horizon)
+        pony.orm.delete(p for p in cls if p.ended < horizon)
 
 
 # after all entities have been created
@@ -160,7 +160,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
     def add(self, base: network.StationAvailability) -> bool:
         try:
             a = StationAvailability.__getitem__((base.station_id, base.stratum, to_timestamp(base.valid_at)))
-        except pony.ObjectNotFound:
+        except pony.orm.ObjectNotFound:
             StationAvailability(
                 valid_at=to_timestamp(base.valid_at),
                 valid_to=to_timestamp_or_none(base.valid_to),
@@ -188,7 +188,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         super().updated(availabilities)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         try:
             super().on_hfdl(packet_info)
@@ -196,7 +196,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
             logger.error('HFDL processing', exc_info=err)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def on_community(self, airframes: dict) -> None:
         try:
             super().on_community(airframes)
@@ -204,7 +204,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
             logger.error('community processing', exc_info=err)
 
     # wrap in a session for database access on delegated functions.
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def on_systable(self, station_table: str) -> None:
         super().on_systable(station_table)
 
@@ -212,19 +212,19 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         self, station_id: int, at: Optional[datetime.datetime] = None
     ) -> Optional[network.StationAvailability]:
         when = to_timestamp(at or util.now())
-        q = pony.select(
+        q = pony.orm.select(
             a for a in StationAvailability
             if a.station_id == station_id
         )
         q = q.where(lambda a: a.valid_at <= when)
         q = q.where(lambda a: a.valid_to is None or a.valid_to >= when)
-        q = q.sort_by(pony.desc(StationAvailability.stratum), pony.desc(StationAvailability.valid_at))
+        q = q.sort_by(pony.orm.desc(StationAvailability.stratum), pony.orm.desc(StationAvailability.valid_at))
         row = q.first()
         # if not row:
         #     logger.info(f'No availability for {station_id} at {when} ({at})... {row}')
         return row.as_local() if row else None
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[network.StationAvailability]:
         found = []
         sids = network.STATIONS.by_id.keys()
@@ -234,14 +234,14 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
                 found.append(la)
         return found
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def current(self) -> Sequence[network.StationAvailability]:
         return self.active()
 
     def current_freqs(self) -> Sequence[int]:
         return list(itertools.chain(*[a.frequencies for a in self.current()]))
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def station(self, station_id: int, at: Optional[datetime.datetime] = None) -> Optional[network.StationAvailability]:
         return self._for_station(station_id, at=at)
 
@@ -252,7 +252,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
 class PacketWatcher(data.AbstractPacketWatcher):
     periodic_task: Optional[asyncio.Task] = None
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         position = packet_info.position or (None, None)
         ReceivedPacket(
@@ -269,7 +269,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
 
     def recent_packets(cls, at: datetime.datetime) -> Sequence[ReceivedPacket]:
         when = to_timestamp(at)
-        q = pony.select(r for r in ReceivedPacket).where(lambda r: r.when > when)
+        q = pony.orm.select(r for r in ReceivedPacket).where(lambda r: r.when > when)
         return q[:]
 
     def prune(self) -> None:
@@ -288,7 +288,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             self.periodic_task = None
 
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -298,7 +298,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[packet.frequency][bin_number] += 1
         return data
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def packets_by_agent(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -308,7 +308,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[packet.agent or 'unknown'][bin_number] += 1
         return data
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
@@ -319,7 +319,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             data[station.station_id][bin_number] += 1
         return data
 
-    @pony.db_session(strict=True)
+    @pony.orm.db_session(strict=True)
     def packets_by_band(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins

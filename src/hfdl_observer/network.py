@@ -72,6 +72,7 @@ class Station:
     longitude: float
     assigned_frequencies: list[int]
     active_frequencies: list[int]
+    observed_frequencies: set[int] | None = None
 
     def __str__(self) -> str:
         return f"<Station #{self.station_id} {self.station_name}>"
@@ -151,6 +152,7 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
 
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         valid_at = util.timestamp_to_datetime(packet_info.timestamp)
+        from_station = packet_info.ground_station['id']
         squitter = packet_info.get('spdu.gs_status', default=[])
         performance = packet_info.get('lpdu.hfnpdu.freq_data', default=[])
         if squitter:
@@ -162,9 +164,10 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
             packet_stratum = Strata.PERFORMANCE
             freqs_key = 'heard_on_freqs'
         else:
+            if packet_info.ground_station:
+                STATIONS.add_observed(from_station, packet_info.frequency)
             return None
         agent = packet_info.station or kind
-        from_station = packet_info.ground_station['id']
         updates = 0
         for gs in squitter or performance or []:
             stn_id = gs['gs']['id']
@@ -317,11 +320,20 @@ class StationLookup:
                 self[availability.station_id].update_active(availability.frequencies)
             self.refresh()
 
+    def add_observed(self, sid: int, frequency: int) -> None:
+        station = self.by_id[sid]
+        station.observed_frequencies = station.observed_frequencies or set()
+        if frequency not in station.observed_frequencies:
+            station.observed_frequencies.add(frequency)
+            self.refresh()
+
     def refresh(self) -> None:
         self.by_freq = {}
         for station in self.by_id.values():
             for freq in station.active_frequencies:
                 self.by_freq[freq] = station
+            for freq in station.observed_frequencies or []:
+                self.by_freq.setdefault(freq, station)
             for freq in station.assigned_frequencies:
                 self.by_freq.setdefault(freq, station)
 
