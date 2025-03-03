@@ -11,13 +11,12 @@ import collections.abc
 import logging
 import os
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import hfdl_observer.data
+import hfdl_observer.env as env
 import hfdl_observer.process
 import hfdl_observer.util as util
-
-import settings
 
 
 logger = logging.getLogger(__name__)
@@ -68,13 +67,13 @@ class Dumphfdl(BaseDecoder):
         if not self.channel or not self.channel.frequencies:
             logger.warning(f'{self} requested an empty command line')
             return []
-        cmd = [str(settings.as_executable_path(self.config['decoder_path']))]
+        cmd = [str(env.as_executable_path(self.config['decoder_path']))]
         cmd.extend(self.listen_args())
         # map some common options
         normalizer: Callable[[Any], Any]
         opt_map: list[tuple[str, str, Callable]] = [
-            ('system_table', 'system-table', settings.as_path),
-            ('system_table_save', 'system-table-save', settings.as_path),
+            ('system_table', 'system-table', env.as_path),
+            ('system_table_save', 'system-table-save', env.as_path),
             ('station_id', 'station-id', lambda x: x),
         ]
         for from_opt, to_opt, normalizer in opt_map:
@@ -83,7 +82,7 @@ class Dumphfdl(BaseDecoder):
                 cmd.extend([f'--{to_opt}', str(normalizer(value))])
         try:
             cmd.extend([
-                '--statsd', str(self.config['statsd_server']),
+                '--statsd', str(self.config['statsd_server']).replace(' ', ':'),
                 '--noise-floor-stats-interval', '30',
             ])
         except KeyError:
@@ -111,10 +110,12 @@ class Dumphfdl(BaseDecoder):
 
         # packet logging, rotated daily (if configured)
         try:
-            packetlog = settings.as_path(self.config['packetlog'])
+            packetlog = env.as_path(self.config['packetlog'])
         except KeyError:
             pass
         else:
+            if packetlog.is_dir():
+                packetlog = packetlog / f'{self.name}.log'
             cmd.extend(['--output', f'decoded:json:file:path={packetlog},rotate=daily',])
 
         # now add all the frequencies we're watching
@@ -224,8 +225,8 @@ class SoapySDRDecoder(DirectDecoder):
         self.sample_rates = sorted(util.normalize_ranges(config.get('sample-rates', [])))
 
     def listen_args(self) -> list[str]:
-        def nested_args(incoming: dict | str) -> str:
-            if isinstance(incoming, dict):
+        def nested_args(incoming: Mapping | str) -> str:
+            if isinstance(incoming, collections.abc.Mapping):
                 return ','.join(f'{k}={v}' for k, v in incoming.items())
             else:
                 return incoming

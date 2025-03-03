@@ -1,15 +1,17 @@
-# hfdl_observer/env.py
+# hfdl_observer/util.py
 # copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
 
+import collections
+import collections.abc
 import datetime
 import json
 import math
 import re
 
-from typing import Union
+from typing import Any, Union
 
 
 def tobool(val: Union[bool, str, int]) -> bool:
@@ -86,3 +88,27 @@ def normalize_ranges(ranges: list[int | list[int]]) -> list[tuple[int, int]]:
             else:
                 result.append((arange, arange))
     return result
+
+
+class DeepChainMap(collections.ChainMap):
+    def __getitem__(self, key: Any) -> Any:
+        values = (mapping[key] for mapping in self.maps if key in mapping)
+        try:
+            first = next(values)
+        except StopIteration:
+            return self.__missing__(key)
+        if isinstance(first, collections.abc.MutableMapping):
+            return self.__class__(first, *values)
+        return first
+
+    def __repr__(self) -> str:
+        return repr(dict(self))  # decompose to dict-ish
+
+    def dict(self) -> dict:
+        d = dict(self)
+        for k, v in list(d.items()):
+            if hasattr(v, 'dict'):
+                d[k] = v.dict()
+            elif isinstance(v, list):
+                d[k] = list(e.dict() if hasattr(e, 'dict') else e for e in v)
+        return d

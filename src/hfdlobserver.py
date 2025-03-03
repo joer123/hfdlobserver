@@ -26,13 +26,13 @@ import hfdl_observer.hfdl
 import hfdl_observer.listeners
 import hfdl_observer.manage as manage
 import hfdl_observer.network as network
+import hfdl_observer.settings
 import hfdl_observer.util as util
 import hfdl_observer.zero as zero
 
 import hfdl_observer.orm as orm
 
 import receivers
-import settings
 
 
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
@@ -43,8 +43,8 @@ class HFDLObserverNode(receivers.ReceiverNode):
     def __init__(self, config: collections.abc.Mapping) -> None:
         super().__init__(config)
 
-        for receiver_name in config['local_receivers']:
-            self.build_local_receiver(receiver_name)
+        for receiver_config in config['local_receivers']:
+            self.build_local_receiver(receiver_config)
 
     def start(self) -> None:
         self.running = True
@@ -85,8 +85,8 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         ]
         self.listener_info = self.hfdl_listener.connection_info
 
-        for receiver_name in config['local_receivers']:
-            self.build_local_receiver(receiver_name)
+        for receiver_config in config['local_receivers']:
+            self.build_local_receiver(receiver_config)
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         self.publish('packet', packet)
@@ -177,7 +177,8 @@ def observe(
 ) -> None:
     loop = asyncio.get_event_loop()
     key = 'observer' if as_controller else 'node'
-    broker_config = settings.registry[key].get('messaging', {})
+    settings = getattr(hfdl_observer.settings, key)
+    broker_config = settings.get('messaging', {})
     remote_broker = bus.RemoteBroker(broker_config)
     bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...
 
@@ -186,7 +187,7 @@ def observe(
         message_broker = zero.ZeroBroker(**broker_config)
         message_broker.start()  # daemon thread, not async.
         network.UPDATER = orm.NetworkUpdater()
-        observer = HFDLObserverController(settings.registry[key])
+        observer = HFDLObserverController(settings)
         cumulative = network.CumulativePacketStats()
         observer.subscribe('packet', cumulative.on_hfdl)
         if on_observer:
@@ -195,7 +196,7 @@ def observe(
             # initialize headless
             observer.network_overview.subscribe('state', observer.ministats)
     else:  # just a node for receivers.
-        observer = HFDLObserverNode(settings.registry[key])
+        observer = HFDLObserverNode(settings)
 
     main_task = asyncio.ensure_future(async_observe(observer))
     for signal in [SIGINT, SIGTERM]:
@@ -253,7 +254,8 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
 def command(
     headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]
 ) -> None:
-    settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
+    hfdl_observer.settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
+    # old_settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     handler = logging.handlers.TimedRotatingFileHandler(log, when='d', interval=1) if log else None
 
     # if not executed in a tty-like thing, headless is forced.

@@ -99,6 +99,7 @@ class Command:
                     }
                     exec_args.update(self.execution_arguments)
                     self.logger.info(f'starting {self}')
+                    self.logger.debug(f'raw := {self.cmd}')
                     self.logger.debug(f'$ `{" ".join(self.cmd)}`')
                     self.recoverable_error_count = 0
                     if self.shell:

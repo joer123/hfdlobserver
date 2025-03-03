@@ -26,10 +26,10 @@ import hfdl_observer.bus as bus
 import hfdl_observer.heat as heat
 import hfdl_observer.hfdl as hfdl
 import hfdl_observer.network as network
+import hfdl_observer.settings as settings
 import hfdl_observer.util as util
 
 import hfdlobserver
-import settings
 
 logger = logging.getLogger(__name__)
 start = datetime.datetime.now()
@@ -637,7 +637,7 @@ class RichLive(rich.live.Live):
 
 
 def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
-    cui_settings = settings.registry['cui']
+    cui_settings = settings.cui
     console = rich.console.Console()
     console.clear()
     logging_console = ConsoleRedirector.create(max(console.options.size.height or 50, 50))

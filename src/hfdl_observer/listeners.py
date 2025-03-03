@@ -139,7 +139,7 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
     def connection_info(self) -> dict:
         address = self.settings['address']
         if address == '0.0.0.0' or address == '*':
-            address = self.settings.get('external_address', None)
+            address = self.settings.get('advertised_address', None)
             if not address:
                 logger.warning('attempting to discover a visible IP address. This may explode.')
                 import socket
@@ -147,7 +147,7 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
                 s.connect(("254.254.254.254", 80))  # this address is in an unroutable and unusable space.
                 address = s.getsockname()[0]
                 s.close()
-                logger.warning(f'found {address}. Setting external_address is preferred.')
+                logger.warning(f'found {address}. Setting advertised_address is preferred.')
         return {
             'protocol': 'udp',
             'address': address,

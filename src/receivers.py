@@ -13,7 +13,7 @@ import logging
 import random
 import uuid
 
-from typing import Any, Coroutine, Optional
+from typing import Any, Coroutine, MutableMapping, Optional
 
 import hfdl_observer
 import hfdl_observer.bus as bus
@@ -24,7 +24,6 @@ import hfdl_observer.util as util
 
 import decoders
 import iqsources
-import settings
 
 
 logger = logging.getLogger(__name__)
@@ -235,15 +234,19 @@ class Web888ExecReceiver(Web888Receiver):
             bus.Message(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
         )
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
-        client_task = await self.client.listen(self.channel)
+        client = self.client
+        decoder = self.decoder
+        client_task = await client.listen(self.channel)
         async with self.client.running_condition:
             self.tasks.append(client_task)
             client_task.add_done_callback(self.on_task_done)
-            await self.client.running_condition.wait()
-            self.decoder.iq_fd = self.client.pipe.read
-            decoder_task = await self.decoder.listen(self.channel)
+            await client.running_condition.wait()
+            self.decoder.iq_fd = client.pipe.read
+            decoder_task = await decoder.listen(self.channel)
             self.tasks.append(decoder_task)
             decoder_task.add_done_callback(self.on_task_done)
+            decoder_task.add_done_callback(lambda _: asyncio.get_running_loop().create_task(client.stop()))
+            client_task.add_done_callback(lambda _: asyncio.get_running_loop().create_task(decoder.stop()))
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')
@@ -342,12 +345,13 @@ class ReceiverNode():
     def message_broker(self) -> bus.RemoteBroker:
         raise NotImplementedError(self.__class__.__name__)
 
-    def build_local_receiver(self, receiver_name: str) -> LocalReceiver:
-        receiver_base = self.config['all_receivers'][receiver_name]
-        receiver_config = settings.flatten(receiver_base, 'receiver')
+    def build_local_receiver(self, receiver_config: MutableMapping) -> LocalReceiver:
+        # receiver_base = self.config['all_receivers'][receiver_name]
+        # receiver_config = settings.flatten(receiver_base, 'receiver')
+        print(receiver_config)
         typename = receiver_config['type']
         klass = globals()[typename]
-        receiver: LocalReceiver = klass(receiver_name, receiver_config)
+        receiver: LocalReceiver = klass(receiver_config['name'], receiver_config)
         receiver.subscribe('fatal', self.on_fatal_error)
         self.local_receivers.append(receiver)
         return receiver

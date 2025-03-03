@@ -1,4 +1,4 @@
-# hfdl_observer/py
+# hfdl_observer/network.py
 # copyright 2025 Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause

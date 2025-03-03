@@ -14,9 +14,8 @@ import pathlib
 from typing import Any, Optional
 
 import hfdl_observer.data
+import hfdl_observer.env as env
 import hfdl_observer.process
-
-import settings
 
 
 logger = logging.getLogger(__name__)
@@ -44,10 +43,10 @@ class KiwiClient:
         agc = self.config['agc_files']
         band = center_freq // 1000
         for k in [band, '*']:
-            agc_file = settings.as_path(agc.get(k))
+            agc_file = env.as_path(agc.get(k))
             if agc_file.exists():
                 return agc_file
-        return settings.as_path('agc.yaml')
+        return env.as_path('agc.yaml')
 
     def commandline(self) -> list[str]:
         if not self.channel or not self.channel.frequencies:
@@ -56,7 +55,7 @@ class KiwiClient:
         # | dumphfdl --iq-file - --sample-rate 12000 --sample-format CS16 --read-buffer-size 9600 --centerfreq 8927 8927
         # find the executable.
         return [
-            str(settings.as_executable_path(self.config['recorder_path'])),
+            str(env.as_executable_path(self.config['recorder_path'])),
             '--nc',
             '--log', 'info',
             '-s', self.config['address'],
