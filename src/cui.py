@@ -40,6 +40,7 @@ PANE_BAR = rich.style.Style.parse('bright_white on bright_black')
 SUBDUED_TEXT = rich.style.Style.parse('grey50 on black')
 NORMAL_TEXT = rich.style.Style.parse('white on black')
 PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
+BASIC_CELL_STYLE = rich.style.Style.parse('bright_black on black')
 
 
 CellText = tuple[str | None, str | rich.style.Style | None]
@@ -159,6 +160,11 @@ class ObserverDisplay:
 
     def update_counts(self, table: rich.table.Table) -> None:
         if table.row_count:
+            if self.counts is not None:
+                # dubious, attempt to voodoo patch a possible memory leak in Rich
+                # del self.counts.rows
+                # del self.counts.columns
+                del self.counts
             self.counts = table
 
     def on_forecast(self, forecast: Any) -> None:
@@ -296,7 +302,7 @@ class AbstractHeatMapFormatter(Generic[TableSourceT]):
     def cell(
         self, index: int, cell: heat.Cell, row_header: heat.RowHeader
     ) -> CellText:
-        style: Union[rich.style.Style, str] = 'bright_black on black'
+        style: Union[rich.style.Style, str] = BASIC_CELL_STYLE
         stroke = self.strokes[index % 10]
         if cell.value:
             style = self.style(cell.value)
@@ -385,7 +391,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
     def cell(
         self, index: int, cell: heat.Cell, row_header: heat.RowHeader
     ) -> CellText:
-        style: Union[rich.style.Style, str] = 'bright_black on black'
+        style: Union[rich.style.Style, str] = BASIC_CELL_STYLE
         stroke = self.strokes[index % 10]
         if cell.value:
             style = self.style(cell.value)
@@ -583,6 +589,7 @@ class HeatMap:
             table = rich.table.Table.grid(expand=True)
             table.add_row(f" 📊 per {bin_str}", style=PANE_BAR)
             table.add_row(" Awaiting data...")
+        del source
         self.display.update_counts(table)
 
     async def run(self) -> None:
