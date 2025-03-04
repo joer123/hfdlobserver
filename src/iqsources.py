@@ -10,6 +10,7 @@ import collections.abc
 import logging
 import os
 import pathlib
+import random
 
 from typing import Any, Optional
 
@@ -43,9 +44,12 @@ class KiwiClient:
         agc = self.config['agc_files']
         band = center_freq // 1000
         for k in [band, '*']:
-            agc_file = env.as_path(agc.get(k))
-            if agc_file.exists():
-                return agc_file
+            try:
+                agc_file = env.as_path(agc[k])
+                if agc_file.exists():
+                    return agc_file
+            except KeyError:
+                pass
         return env.as_path('agc.yaml')
 
     def commandline(self) -> list[str]:
@@ -78,7 +82,7 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
     def __init__(self, name: str, config: collections.abc.MutableMapping):
         KiwiClient.__init__(self, name, config)
         hfdl_observer.process.ProcessHarness.__init__(self)
-        self.settle_time = config.get('settle_time', 0)
+        self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def commandline(self) -> list[str]:
         return KiwiClient.commandline(self)
@@ -90,7 +94,6 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
         os.close(self.pipe.write)
-        pass
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
@@ -100,9 +103,11 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
 
     def create_command(self) -> KiwiClientCommand:
         self.pipe = Pipe(*os.pipe())
+        cmd = self.commandline()
+        # self.logger.info(f'CMD: {cmd}')
         command = KiwiClientCommand(
             self.logger,
-            self.commandline(),
+            cmd,
             self.execution_arguments(),
             on_prepare=self.on_prepare,
             on_running=self.on_execute,

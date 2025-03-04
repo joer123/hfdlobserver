@@ -182,7 +182,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
 
     def on_task_done(self, task: asyncio.Task) -> None:
         exc = task.exception()
-        if exc:
+        if exc and not task.cancelled():
             self.publish('fatal', (str(self), str(exc)))
         if task in self.tasks:
             # we have not been asked to stop or kill, so this task has ended prematurely.
@@ -241,7 +241,7 @@ class Web888ExecReceiver(Web888Receiver):
             self.tasks.append(client_task)
             client_task.add_done_callback(self.on_task_done)
             await client.running_condition.wait()
-            self.decoder.iq_fd = client.pipe.read
+            decoder.iq_fd = client.pipe.read
             decoder_task = await decoder.listen(self.channel)
             self.tasks.append(decoder_task)
             decoder_task.add_done_callback(self.on_task_done)
@@ -251,14 +251,18 @@ class Web888ExecReceiver(Web888Receiver):
     async def stop(self) -> None:
         self.logger.debug('Stopping')
         self.tasks = []  # don't care about these tasks anymore
-        await self.client.stop()
-        await self.decoder.stop()
+        client = self.client
+        decoder = self.decoder
+        await client.stop()
+        await decoder.stop()
 
     async def kill(self) -> None:
         self.logger.debug('Killing')
         self.tasks = []  # don't care about these tasks anymore
-        await self.client.kill()
-        await self.decoder.kill()
+        client = self.client
+        decoder = self.decoder
+        await client.stop()
+        await decoder.stop()
 
 
 class Web888PipeReceiver(Web888Receiver):
@@ -348,7 +352,6 @@ class ReceiverNode():
     def build_local_receiver(self, receiver_config: MutableMapping) -> LocalReceiver:
         # receiver_base = self.config['all_receivers'][receiver_name]
         # receiver_config = settings.flatten(receiver_base, 'receiver')
-        print(receiver_config)
         typename = receiver_config['type']
         klass = globals()[typename]
         receiver: LocalReceiver = klass(receiver_config['name'], receiver_config)

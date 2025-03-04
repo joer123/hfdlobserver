@@ -10,6 +10,7 @@ import collections
 import collections.abc
 import logging
 import os
+import random
 
 from typing import Any, Callable, Mapping, Optional
 
@@ -145,7 +146,7 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         IQDecoder.__init__(self, name, config, listener)
         hfdl_observer.process.ProcessHarness.__init__(self)
-        self.settle_time = config.get('settle_time', 0)
+        self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def commandline(self) -> list[str]:
         return IQDecoder.commandline(self)
@@ -157,16 +158,17 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
         os.close(self.iq_fd)
-        pass
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
         return await self.start()
 
     def create_command(self) -> IQDecoderCommand:
+        cmd = self.commandline()
+        # self.logger.info(f'CMD: {cmd}')
         command = IQDecoderCommand(
             self.logger,
-            self.commandline(),
+            cmd,
             self.execution_arguments(),
             on_prepare=self.on_prepare,
             on_running=self.on_execute,
@@ -187,7 +189,7 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         Dumphfdl.__init__(self, name, config, listener)
         hfdl_observer.process.ProcessHarness.__init__(self)
-        self.settle_time = config.get('settle_time', 0)
+        self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def create_command(self) -> DumphfdlCommand:
         command = DumphfdlCommand(

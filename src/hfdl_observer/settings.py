@@ -228,7 +228,7 @@ defaults = {
                 "type": "KiwiClientProcess",
                 "settle_time": 1,
                 "quiet": False,
-                "username": "hfdlobserver",
+                "username": "kiwi:hfdlobserver",
                 "channel_width": 12000,
                 "agc_files": {
                     "*": "agc.yaml",
@@ -272,7 +272,7 @@ defaults = {
                 "dumphfdl": "default",
                 "soapysdr": {
                     "driver": "airspyhf",
-                    "gain": None  # 
+                    "gain": None
                 }
             }
         },

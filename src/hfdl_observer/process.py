@@ -63,6 +63,7 @@ class Command:
         self.unrecoverable_errors = unrecoverable_errors or []
         self.recoverable_errors = recoverable_errors or []
         self.valid_return_codes = valid_return_codes or [0]
+        self.process_logger = logger
 
     # async def on_prepare(self) -> None:
     #     pass
@@ -104,29 +105,30 @@ class Command:
                     self.recoverable_error_count = 0
                     if self.shell:
                         shell_cmd = shlex.join(self.cmd)
-                        self.process = (
+                        process = (
                             await asyncio.subprocess.create_subprocess_shell(shell_cmd, **exec_args)  # type: ignore
                         )
                     else:
-                        self.process = (
+                        process = (
                             await asyncio.subprocess.create_subprocess_exec(*self.cmd, **exec_args)  # type: ignore
                         )
-                    self.process_logger = self.logger.getChild(f'pid#{self.process.pid}')
+                    self.process = process
+                    self.process_logger = self.logger.getChild(f'pid#{process.pid}')
                     self.process_logger.debug('process started')
 
                     if self.on_running:
-                        self.on_running(self.process, execution_context)
+                        self.on_running(process, execution_context)
                     async with self.running_condition:
                         self.running_condition.notify_all()
 
                     try:
                         self.process_logger.debug('starting error watcher')
-                        asyncio.get_running_loop().create_task(self.watch_stderr(self.process.pid, self.process.stderr))
-                        retcode = await self.process.wait()
+                        asyncio.get_running_loop().create_task(self.watch_stderr(process.pid, process.stderr))
+                        retcode = await process.wait()
                         if retcode not in self.valid_return_codes and not (self.terminated or self.killed):
-                            raise Exception(f'{self} process {self.process.pid} exited with {retcode}')
+                            raise Exception(f'{self} process {process.pid} exited with {retcode}')
                     except Exception as e:
-                        self.process_logger.error(f'process {self.process.pid} aborted.', exc_info=e)
+                        self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
                         raise
                     finally:
                         if self.on_exited:
@@ -137,7 +139,7 @@ class Command:
                     if self.fire_once:
                         break
 
-                    self.process_logger.info(f'process {self.process.pid} finished')
+                    self.process_logger.info(f'process {process.pid} finished')
                 self.logger.debug('resources freed')
         except Exception as e:
             self.logger.error('encountered an error', exc_info=e)
@@ -146,35 +148,40 @@ class Command:
             self.logger.debug('run completed')
 
     async def terminate(self) -> Optional[asyncio.Task]:
-        if getattr(self, 'process', None):
+        task = self.task
+        process = getattr(self, 'process', None)
+        if process:
             self.terminated = True
             self.process_logger.info('terminating')
             try:
-                self.process.terminate()
-                if self.task is not None:
-                    await asyncio.wait_for(self.task, timeout=3)
+                process.terminate()
+                if task is not None:
+                    await asyncio.wait_for(task, timeout=3)
             except asyncio.TimeoutError:
                 logger.warn(f'{self} process did not end cleanly. killing.')
-                await self.kill()
+                await self.kill()  # SUS: have to ensure at this point we're killing the right process.
             except ProcessLookupError as e:
                 logger.info('problem', exc_info=e)
         else:
             self.process_logger.debug('no process, cannot terminate.')
-        return self.task
+        return task
 
     async def kill(self) -> Optional[asyncio.Task]:
-        if getattr(self, 'process', None):
+        task = self.task
+        # SUS may need more protection on killing the correct process
+        process = getattr(self, 'process', None)
+        if process:
             self.process_logger.warning('killing')
             self.killed = True
             try:
-                self.process.kill()
-                if self.task is not None:
-                    await asyncio.wait_for(self.task, timeout=3)
+                process.kill()
+                if task is not None:
+                    await asyncio.wait_for(task, timeout=3)
             except ProcessLookupError as e:
                 logger.info('problem', exc_info=e)
         else:
             self.process_logger.debug('no process, cannot kill.')
-        return self.task
+        return task
 
     def start(self) -> asyncio.Task:
         if not self.task:

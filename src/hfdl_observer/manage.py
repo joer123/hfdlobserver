@@ -74,6 +74,7 @@ class NetworkOverview(bus.LocalPublisher):
         updater.subscribe('availability', self.schedule_save)
 
     def start(self) -> None:
+        logger.info('starting network overview')
         loop = asyncio.get_running_loop()
         for startable in self.startables:
             self.tasks.append(loop.create_task(startable()))
@@ -460,17 +461,24 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
     def maybe_orchestrate(self) -> None:
         delay = self.config.get('delay', 10)
         next_orchestrate = self.last_orchestrated + datetime.timedelta(seconds=delay)
-        if self.orchestration_task is None:
+        current_task = asyncio.current_task()
+        if current_task == self.orchestration_task:
+            self.orchestrate()
+        elif self.orchestration_task is None:
             if next_orchestrate <= util.now():
+                logger.info('orchestrating soon')
                 self.orchestration_task = asyncio.get_running_loop().call_soon(self.orchestrate)
             else:
+                logger.info(f'orchestrating in {delay}s')
                 self.orchestration_task = asyncio.get_running_loop().call_later(delay, self.maybe_orchestrate)
+        else:
+            logger.info(f'not orchestrating... {self.orchestration_task}')
 
     def orchestrate(self) -> None:
-        targetted_freqs = network.STATIONS.active()
-        chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
         self.last_orchestrated = util.now()
         self.orchestration_task = None
+        targetted_freqs = network.STATIONS.active()
+        chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
 
         targetted = []
         untargetted = []
