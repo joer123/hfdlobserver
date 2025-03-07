@@ -328,3 +328,15 @@ class PacketWatcher(data.AbstractPacketWatcher):
             bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
             data[packet.frequency // 1000][bin_number] += 1
         return data
+
+    @pony.orm.db_session(strict=True)
+    def packets_by_frequency_set(
+        cls, bin_size: int, num_bins: int, frequency_sets: dict[int, str]
+    ) -> Mapping[str, Sequence[int]]:
+        data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
+        total_seconds = bin_size * num_bins
+        when = util.now() - datetime.timedelta(seconds=total_seconds)
+        for packet in cls.recent_packets(when):
+            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+            data[frequency_sets.get(packet.frequency, str(packet.frequency))][bin_number] += 1
+        return data

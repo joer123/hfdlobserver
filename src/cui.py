@@ -25,6 +25,7 @@ import rich.text
 import hfdl_observer.bus as bus
 import hfdl_observer.heat as heat
 import hfdl_observer.hfdl as hfdl
+import hfdl_observer.manage as manage
 import hfdl_observer.network as network
 import hfdl_observer.settings as settings
 import hfdl_observer.util as util
@@ -55,6 +56,7 @@ class ObserverDisplay:
     forecast: rich.text.Text
     uptime_text: rich.text.Text
     totals_text: rich.text.Text
+    garbage: collections.deque[rich.table.Table]
 
     def __init__(
         self,
@@ -63,6 +65,7 @@ class ObserverDisplay:
         cumulative_line: 'CumulativeLine',
         forecaster: bus.RemoteURLRefresher,
     ) -> None:
+        self.garbage = collections.deque()
         self.console = console
         self.heatmap = heatmap
         self.cumulative_line = cumulative_line
@@ -94,6 +97,8 @@ class ObserverDisplay:
             self.root.update(t)
 
     def setup_status(self) -> None:
+        if self.status:
+            self.garbage.append(self.status)
         table = rich.table.Table.grid(expand=True)
         table.add_column()
         table.add_column(justify="center")
@@ -105,6 +110,8 @@ class ObserverDisplay:
         self.status = table
 
     def setup_totals(self) -> None:
+        if self.totals:
+            self.garbage.append(self.totals)
         table = rich.table.Table.grid(expand=True)
         table.add_column()  # title
         table.add_column(justify='right')   # Grand Total
@@ -123,6 +130,8 @@ class ObserverDisplay:
         self.uptime_text.plain = f'UP {uptime}'
 
     def update_tty_bar(self) -> None:
+        if self.tty_bar:
+            self.garbage.append(self.tty_bar)
         table = rich.table.Table.grid(expand=True)
         table.add_row(' 📰 Log', style=PANE_BAR)
         self.tty_bar = table
@@ -140,7 +149,9 @@ class ObserverDisplay:
         )
 
     def update_log(self, ring: collections.deque) -> None:
-        # WARNING: do not log from within this method.
+        # WARNING: do not use any logger from within this method.
+        if self.tty:
+            self.garbage.append(self.tty)
         table = rich.table.Table.grid(expand=True)
         available_space = (
             self.current_height
@@ -161,10 +172,7 @@ class ObserverDisplay:
     def update_counts(self, table: rich.table.Table) -> None:
         if table.row_count:
             if self.counts is not None:
-                # dubious, attempt to voodoo patch a possible memory leak in Rich
-                # del self.counts.rows
-                # del self.counts.columns
-                del self.counts
+                self.garbage.append(self.counts)
             self.counts = table
 
     def on_forecast(self, forecast: Any) -> None:
@@ -210,6 +218,23 @@ class ObserverDisplay:
     @property
     def current_height(self) -> int:
         return self.console.options.size.height or 25
+
+    def clear_table(self, table: Optional[rich.table.Table]) -> None:
+        # dubious, attempt to voodoo patch a possible memory leak in Rich
+        with self.root._lock:
+            if table is not None:
+                if hasattr(table.rows, 'clear'):
+                    table.rows.clear()
+                if hasattr(table.columns, 'clear'):
+                    table.columns.clear()
+
+    def on_render(self) -> None:
+        while len(self.garbage) > 0:
+            try:
+                garbage = self.garbage.popleft()
+            except IndexError:
+                break
+            self.clear_table(garbage)
 
 
 class CumulativeLine:
@@ -473,6 +498,31 @@ class HeatMapByAgentFormatter(AbstractHeatMapFormatter[heat.TableByAgent]):
         return (f' {header.label: >17} ', style)
 
 
+class HeatMapByReceiverFormatter(AbstractHeatMapFormatter[heat.TableByFrequencySet]):
+    def __init__(
+        self,
+        bin_size: int,
+        num_bins: int,
+        proxies: list[manage.ReceiverProxy],
+    ) -> None:
+        self.bin_size = bin_size
+        frequency_sets = {}
+        for proxy in proxies:
+            if proxy.channel is not None:
+                frequency_sets.update({f: proxy.name for f in proxy.channel.frequencies or []})
+        self.source = heat.TableByFrequencySet(self.bin_size, num_bins, frequency_sets)
+
+    def row_header(
+        self, header: heat.RowHeader, row: Sequence[heat.Cell]
+    ) -> CellText:
+        if any(cell.value for cell in row):
+            style = PROMINENT_TEXT
+        else:
+            style = NORMAL_TEXT
+        label = header.label[-16:]
+        return (f' {label: >17} ', style)
+
+
 class HeatMap:
     config: dict
     last_render_time: float = 0
@@ -522,7 +572,11 @@ class HeatMap:
     def by_agent(self, num_bins: int) -> AbstractHeatMapFormatter:
         return HeatMapByAgentFormatter(self.bin_size, num_bins)
 
+    def by_receiver(self, num_bins: int) -> AbstractHeatMapFormatter:
+        return HeatMapByReceiverFormatter(self.bin_size, num_bins, list(self.observer.proxies.values()))
+
     def register(self, observer: hfdlobserver.HFDLObserverController) -> None:
+        self.observer = observer
         observer.subscribe('packet', self.on_hfdl)
         observer.subscribe('observing', self.on_observing)
 
@@ -635,12 +689,19 @@ class ConsoleRedirector(rich.console.Console):
 
 
 class RichLive(rich.live.Live):
-    on_refresh: Optional[Sequence[Callable]] = None
+    pre_refresh: Optional[Sequence[Callable]] = None
+    post_refresh: Optional[Sequence[Callable]] = None
 
     def refresh(self) -> None:
-        for callback in self.on_refresh or []:
-            callback()
-        super().refresh()
+        with self._lock:
+            for callback in self.pre_refresh or []:
+                callback()
+            try:
+                super().refresh()
+            except AssertionError as err:
+                logger.warning(f'ignoring {err}')
+            for callback in self.post_refresh or []:
+                callback()
 
 
 def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
@@ -693,9 +754,12 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
         display.root, refresh_per_second=SCREEN_REFRESH_RATE, console=console, transient=True, screen=True,
         redirect_stderr=False, redirect_stdout=False, vertical_overflow="crop",
     ) as live:
-        live.on_refresh = [  # type: ignore[attr-defined]
+        live.pre_refresh = [  # type: ignore[attr-defined]
             # display.update_status,
             # display.update,
+        ]
+        live.post_refresh = [  # type: ignore[attr-defined]
+            display.on_render,
         ]
         hfdlobserver.observe(on_observer=observing)
 
