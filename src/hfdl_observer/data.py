@@ -11,6 +11,8 @@ from typing import Any, Mapping, Optional, Sequence
 
 import hfdl_observer.hfdl as hfdl
 
+DEFAULT_RECEIVER_WEIGHT = 0
+
 
 class ListenerConfig:
     proto: str = 'udp'
@@ -149,6 +151,11 @@ class AbstractPacketWatcher:
         raise NotImplementedError(str(cls))
 
     def packets_by_band(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
+        raise NotImplementedError(str(cls))
+
+    def packets_by_frequency_set(
+        cls, bin_size: int, num_bins: int, frequency_sets: dict[int, str]
+    ) -> BinnedPacketDataType:
         raise NotImplementedError(str(cls))
 
 

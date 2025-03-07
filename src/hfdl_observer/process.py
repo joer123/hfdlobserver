@@ -15,6 +15,8 @@ from typing import Any, Callable, Coroutine, Optional
 
 import logging
 
+import hfdl_observer.util as util
+
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +88,8 @@ class Command:
         self.task = asyncio.current_task()
         try:
             while not self.killed:
-                # execution context allows you to set up such things as temp fifos for stdout parsing. This is not
-                # currently used by the current HFDL Observer, but was used with the earlier dumbhfdl.
+                # execution context allows you to set up such things as temp fifos for stdout parsing or managing
+                # piping between processes.
                 with self.execution_context_manager() as execution_context:
                     if self.on_prepare:
                         await self.on_prepare()
@@ -100,8 +102,7 @@ class Command:
                     }
                     exec_args.update(self.execution_arguments)
                     self.logger.info(f'starting {self}')
-                    self.logger.debug(f'raw := {self.cmd}')
-                    self.logger.debug(f'$ `{" ".join(self.cmd)}`')
+                    self.logger.debug(f'$ `{shlex.join(self.cmd)}`')
                     self.recoverable_error_count = 0
                     if self.shell:
                         shell_cmd = shlex.join(self.cmd)
@@ -126,7 +127,9 @@ class Command:
                         asyncio.get_running_loop().create_task(self.watch_stderr(process.pid, process.stderr))
                         retcode = await process.wait()
                         if retcode not in self.valid_return_codes and not (self.terminated or self.killed):
-                            raise Exception(f'{self} process {process.pid} exited with {retcode}')
+                            self.process_logger.error(f'exited with {retcode}')
+                        else:
+                            self.process_logger.info(f'exited with {retcode}')
                     except Exception as e:
                         self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
                         raise
@@ -139,8 +142,7 @@ class Command:
                     if self.fire_once:
                         break
 
-                    self.process_logger.info(f'process {process.pid} finished')
-                self.logger.debug('resources freed')
+                self.logger.debug('execution context freed')
         except Exception as e:
             self.logger.error('encountered an error', exc_info=e)
             raise
@@ -158,10 +160,11 @@ class Command:
                 if task is not None:
                     await asyncio.wait_for(task, timeout=3)
             except asyncio.TimeoutError:
-                logger.warn(f'{self} process did not end cleanly. killing.')
+                self.process_logger.warning('process did not end cleanly. killing.')
                 await self.kill()  # SUS: have to ensure at this point we're killing the right process.
+                self.process_logger.info('kill completed')
             except ProcessLookupError as e:
-                logger.info('problem', exc_info=e)
+                self.process_logger.warning('problem', exc_info=e)
         else:
             self.process_logger.debug('no process, cannot terminate.')
         return task
@@ -177,8 +180,9 @@ class Command:
                 process.kill()
                 if task is not None:
                     await asyncio.wait_for(task, timeout=3)
+                    self.process_logger.info('process kill returned')
             except ProcessLookupError as e:
-                logger.info('problem', exc_info=e)
+                self.process_logger.warning('problem', exc_info=e)
         else:
             self.process_logger.debug('no process, cannot kill.')
         return task
@@ -193,28 +197,36 @@ class Command:
     async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
         if stream:
             stream_logger = self.process_logger
-            async for data in stream:
-                try:
-                    line = data.decode('utf8').rstrip()
-                except UnicodeDecodeError:
-                    continue
-                stream_logger.info(line)
-                if any(re.search(pattern, line) for pattern in self.unrecoverable_errors):
-                    stream_logger.warning(f'encountered unrecoverable error: "{line}".')
-                    # terminate, subclasses can restart process if desired.
-                    await self.terminate()
-                    break
-                if any(re.search(pattern, line) for pattern in self.recoverable_errors):
-                    self.recoverable_error_count += 1
-                    stream_logger.debug(f'recoverable error detected. Current count {self.recoverable_error_count}')
-                    if self.recoverable_error_count > self.recoverable_error_limit:
-                        stream_logger.warning(f'received too many recoverable errors `{line}`.')
+            try:
+                async for data in stream:
+                    try:
+                        line = data.decode('utf8').rstrip()
+                    except UnicodeDecodeError:
+                        continue
+                    stream_logger.info(line)
+                    if any(re.search(pattern, line) for pattern in self.unrecoverable_errors):
+                        stream_logger.warning(f'encountered unrecoverable error: "{line}".')
+                        # terminate, subclasses can restart process if desired.
                         await self.terminate()
                         break
-                if not self.process:
-                    break
-                await asyncio.sleep(0)
-        stream_logger.info(f'finished watching {stream}')
+                    if any(re.search(pattern, line) for pattern in self.recoverable_errors):
+                        self.recoverable_error_count += 1
+                        stream_logger.debug(f'recoverable error detected. Current count {self.recoverable_error_count}')
+                        if self.recoverable_error_count > self.recoverable_error_limit:
+                            stream_logger.warning(f'received too many recoverable errors `{line}`.')
+                            await self.terminate()
+                            break
+                    if not self.process:
+                        break
+                    await asyncio.sleep(0)
+            except OSError as err:
+                if util.is_bad_file_descriptor(err):
+                    # file was closed elsewhere. should mean the watched process exited as well.
+                    self.logger.info(f'ignoring {err} on error watcher')
+                    await self.terminate()
+                else:
+                    raise
+        (stream_logger or self.logger).info(f'finished watching {stream}')
 
     def reset_recoverable_error_count(self, *_: Any) -> None:
         self.recoverable_error_count = 0
@@ -247,7 +259,7 @@ class ProcessHarness:
             await self.command.kill()
         command: Command = self.create_command()
         self.command = command
-        task = self.command.start()
+        task = command.start()
         task.add_done_callback(self.cleanup)
         return task
 

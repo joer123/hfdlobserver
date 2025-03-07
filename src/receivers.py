@@ -10,6 +10,7 @@ import collections.abc
 import datetime
 import functools
 import logging
+import os
 import random
 import uuid
 
@@ -90,10 +91,19 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
             self.deregistered()
 
     def on_remote_ping(self, message: bus.Message) -> None:
-        uuid: str = message.payload
+        if isinstance(message.payload, str):
+            uuid: str = message.payload
+            requester: str = str(self.conductor)
+        else:
+            requester = message.payload['src']
+            uuid = message.payload['dst']
         if uuid == self.uuid:
             self.keepalive()
-            bus.REMOTE_BROKER.publish(bus.Message(self.target, 'pong', self.payload()))
+            bus.REMOTE_BROKER.publish(bus.Message(self.target, 'pong', self.payload(to=requester, src=self.uuid)))
+        else:
+            # observer is confused. Thinks another node is us. Reregister to clear it up.
+            # This could cause flapping if there are two nodes with the same name actively running and registering.
+            self.register()
 
     def on_remote_die(self, _: bus.Message) -> None:
         # self.keepalive()
@@ -101,8 +111,9 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         self.deregister()
 
     def on_remote_available(self, message: bus.Message) -> None:
-        self.keepalive()
-        if not self.registered:
+        if self.registered and message.payload['name'] == self.conductor:
+            self.keepalive()
+        else:
             payload: dict = message.payload
             self.conductor = payload['name']
             self.listener = data.ListenerConfig(payload['listener'])
@@ -120,7 +131,14 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         if self.conductor is not None:
             self.setup_harnesses()
             bus.REMOTE_BROKER.publish(
-                bus.Message(self.conductor, 'register', self.payload(widths=self.observable_widths()))
+                bus.Message(
+                    self.conductor,
+                    'register',
+                    self.payload(
+                        widths=self.observable_widths(),
+                        weight=self.config.get('weight', data.DEFAULT_RECEIVER_WEIGHT)
+                    )
+                )
             )
 
     def deregister(self) -> None:
@@ -133,6 +151,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     def deregistered(self, _: Any = None) -> None:
         self.registered = False
         self.conductor = None
+        self.keepalive()
 
     def setup_harnesses(self) -> None:
         raise NotImplementedError(str(self.__class__))
@@ -160,16 +179,23 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     async def listen(self, frequencies: list[int]) -> None:
         if set(frequencies) == set(self.frequencies):
             self.logger.info(f'already listening to {frequencies}')
-            bus.REMOTE_BROKER.publish(
-                bus.Message(self.target, 'listening', self.payload(frequencies=frequencies))
-            )
+            self.publish_listening()
             return
         self.logger.info(f'switching to {frequencies} from {self.frequencies}')
         await self.stop()
         self.frequencies = frequencies
         self.channel = self.observing_channel_for(frequencies)
-        await self.start()
-        self.logger.info(f'switched to {frequencies}')
+        if frequencies:
+            await self.start()
+            self.logger.info(f'switched to {frequencies}')
+        else:
+            self.logger.info('empty frequency list, not starting new processes.')
+            self.publish_listening()
+
+    def publish_listening(self) -> None:
+        bus.REMOTE_BROKER.publish(
+            bus.Message(self.target, 'listening', self.payload(frequencies=self.frequencies))
+        )
 
     async def start(self) -> None:
         self.task = asyncio.get_running_loop().create_task(self.run())
@@ -180,20 +206,29 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     async def run(self) -> None:
         raise NotImplementedError(str(self.__class__))
 
+    def clear(self) -> None:
+        for task in self.tasks:
+            logger.info(f'cancelling {task}')
+            task.cancel()
+        self.tasks = []
+        # there are no more tasks, so there's no valid channel
+        self.frequencies = []
+        self.channel = self.observing_channel_for([])
+        self.publish_listening()
+
     def on_task_done(self, task: asyncio.Task) -> None:
-        exc = task.exception()
-        if exc and not task.cancelled():
-            self.publish('fatal', (str(self), str(exc)))
+        if not task.cancelled():
+            exc = task.exception()
+            if exc:
+                self.logger.error(f'fatal error encountered: {exc}')
+                self.publish('fatal', (str(self), str(exc)))
+            else:
+                self.logger.info('task done')
         if task in self.tasks:
             # we have not been asked to stop or kill, so this task has ended prematurely.
             self.tasks.remove(task)
             if not self.tasks:
-                # there are no more tasks, so there's no valid channel
-                self.frequencies = []
-                self.channel = self.observing_channel_for([])
-                bus.REMOTE_BROKER.publish(
-                    bus.Message(self.target, 'listening', self.payload(frequencies=self.frequencies))
-                )
+                self.clear()
 
     def __str__(self) -> str:
         return f'({self.__class__.__name__}) {self.name} on {self.frequencies}'
@@ -206,7 +241,7 @@ class Web888Receiver(LocalReceiver):
         super().__init__(name, config)
 
     def observable_widths(self) -> list[int]:
-        return [12]  # hardcoded to the value that kiwisdr uses.
+        return [int(self.config.get('sample_rate', 12000)) // 1000]
 
 
 class DummyReceiver(Web888Receiver):
@@ -216,23 +251,56 @@ class DummyReceiver(Web888Receiver):
         self.decoder = decoders.DummyDecoder(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> None:
-        bus.REMOTE_BROKER.publish(
-            bus.Message(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
-        )
+        self.publish_listening()
 
 
 class Web888ExecReceiver(Web888Receiver):
-    client: iqsources.KiwiClientProcess
-    decoder: decoders.IQDecoderProcess
+    class Run:
+        client: iqsources.KiwiClientProcess
+        decoder: decoders.IQDecoderProcess
+        pipe: util.Pipe
+
+        def __init__(self, client: iqsources.KiwiClientProcess, decoder: decoders.IQDecoderProcess) -> None:
+            self.client = client
+            self.decoder = decoder
+            self.pipe = util.Pipe(*os.pipe())
+            self.client.pipe = self.pipe
+            self.decoder.pipe = self.pipe
+
+        def __del__(self) -> None:
+            self.close_pipe()
+
+        def close_pipe(self) -> None:
+            if self.pipe:
+                for fd in (self.pipe.write, self.pipe.read):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                self.pipe = None  # type: ignore
+
+        async def run(self, channel: data.ObservingChannel) -> None:
+            client_task = self.client.listen(channel)
+            decoder_task = self.decoder.listen(channel)
+            await asyncio.gather(client_task, decoder_task)
+
+        def on_task_done(self, task: asyncio.Task) -> None:
+            self.close_pipe()
 
     def setup_harnesses(self) -> None:
         self.client = iqsources.KiwiClientProcess(self.name, self.config.get('client', {}))
         self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> None:
-        bus.REMOTE_BROKER.publish(
-            bus.Message(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
-        )
+        self.publish_listening()
+        await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
+        run_context = self.Run(self.client, self.decoder)
+        self.run_task = run_task = asyncio.get_running_loop().create_task(run_context.run(self.channel))
+        run_task.add_done_callback(self.on_task_done)
+        run_task.add_done_callback(run_context.on_task_done)
+
+    async def old_run(self) -> None:
+        self.publish_listening()
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         client = self.client
         decoder = self.decoder
@@ -241,7 +309,7 @@ class Web888ExecReceiver(Web888Receiver):
             self.tasks.append(client_task)
             client_task.add_done_callback(self.on_task_done)
             await client.running_condition.wait()
-            decoder.iq_fd = client.pipe.read
+            # decoder.iq_fd = client.pipe.read
             decoder_task = await decoder.listen(self.channel)
             self.tasks.append(decoder_task)
             decoder_task.add_done_callback(self.on_task_done)
@@ -250,19 +318,19 @@ class Web888ExecReceiver(Web888Receiver):
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')
-        self.tasks = []  # don't care about these tasks anymore
         client = self.client
         decoder = self.decoder
         await client.stop()
         await decoder.stop()
+        self.clear()
 
     async def kill(self) -> None:
         self.logger.debug('Killing')
-        self.tasks = []  # don't care about these tasks anymore
         client = self.client
         decoder = self.decoder
         await client.stop()
         await decoder.stop()
+        self.clear()
 
 
 class Web888PipeReceiver(Web888Receiver):
@@ -315,9 +383,7 @@ class DirectReceiver(LocalReceiver):
         logger.info(f'observable channel widths {self.observable_channel_widths}')
 
     async def run(self) -> None:
-        bus.REMOTE_BROKER.publish(
-            bus.Message(self.target, 'listening', self.payload(frequencies=self.channel.frequencies))
-        )
+        self.publish_listening()
         self.logger.info('queued')
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         decoder_task = await self.decoder.listen(self.channel)
@@ -326,12 +392,13 @@ class DirectReceiver(LocalReceiver):
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')
-        self.tasks = []  # don't care about these tasks anymore
-        await self.decoder.stop()
+        self.clear()
+        if hasattr(self, 'decoder'):
+            await self.decoder.stop()
 
     async def kill(self) -> None:
         self.logger.debug('Killing')
-        self.tasks = []  # don't care about these tasks anymore
+        self.clear()
         if hasattr(self, 'decoder'):
             await self.decoder.kill()
 

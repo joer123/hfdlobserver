@@ -203,6 +203,15 @@ def observe(
         loop.add_signal_handler(signal, cancel_all_tasks)
     try:
         loop.run_until_complete(main_task)
+        # try:
+        #     loop.run_until_complete(main_task)
+        #     tasks = Task.all_tasks()
+        #     for t in [t for t in tasks if not (t.done() or t.cancelled())]:
+        #         # give canceled tasks the last chance to run
+        #         loop.run_until_complete(t)
+        # finally:
+        #     loop.close()
+
         logger.info("HFDLObserver done.")
     except Exception as exc:
         logger.error("Fatal error encountered", exc_info=exc)
@@ -251,12 +260,18 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
         exists=True,
     ), default=None,
 )
+@click.option('--trace', hidden=True, is_flag=True)
 def command(
-    headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]
+    headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path], trace: bool
 ) -> None:
+    global TRACEMALLOC
+    TRACEMALLOC = trace
+
     hfdl_observer.settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     # old_settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     handler = logging.handlers.TimedRotatingFileHandler(log, when='d', interval=1) if log else None
+    if handler is not None:
+        handler.setFormatter(logging.Formatter('%(asctime)s [%(name)s] %(levelname)s - %(message)s'))
 
     # if not executed in a tty-like thing, headless is forced.
     headless = headless or node or not sys.stdout.isatty()

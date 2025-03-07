@@ -17,12 +17,10 @@ from typing import Any, Optional
 import hfdl_observer.data
 import hfdl_observer.env as env
 import hfdl_observer.process
+import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
-
-
-Pipe = collections.namedtuple('Pipe', 'read write')
 
 
 class KiwiClientCommand(hfdl_observer.process.Command):
@@ -32,7 +30,7 @@ class KiwiClientCommand(hfdl_observer.process.Command):
 class KiwiClient:
     config: collections.abc.Mapping
     channel: Optional[hfdl_observer.data.ObservingChannel] = None
-    pipe: Pipe
+    # pipe: Pipe
 
     def __init__(self, name: str, config: collections.abc.MutableMapping):
         self.name = name
@@ -40,7 +38,7 @@ class KiwiClient:
         super().__init__()
         # recoverable error? 'Too busy now. Reconnecting after 15 seconds'
 
-    def agc_file(self, center_freq: float) -> pathlib.Path:
+    def agc_file(self, center_freq: float) -> Optional[pathlib.Path]:
         agc = self.config['agc_files']
         band = center_freq // 1000
         for k in [band, '*']:
@@ -50,7 +48,7 @@ class KiwiClient:
                     return agc_file
             except KeyError:
                 pass
-        return env.as_path('agc.yaml')
+        return None
 
     def commandline(self) -> list[str]:
         if not self.channel or not self.channel.frequencies:
@@ -58,7 +56,7 @@ class KiwiClient:
         # python3 kiwirecorder.py --nc -s n4dkd.asuscomm.com -p 8901 --log info -f 8927 -m iq --tlimit 60 --user kiwi_nc
         # | dumphfdl --iq-file - --sample-rate 12000 --sample-format CS16 --read-buffer-size 9600 --centerfreq 8927 8927
         # find the executable.
-        return [
+        args = [
             str(env.as_executable_path(self.config['recorder_path'])),
             '--nc',
             '--log', 'info',
@@ -68,16 +66,20 @@ class KiwiClient:
             '-m', 'iq',
             '-L', '-8000', '-H', '8000',
             '--OV',
-            '--agc-yaml', str(self.agc_file(self.channel.center)),
             '--user', self.config['username'],
             # '--tlimit', '120',
         ]
+        agc_file = self.agc_file(self.channel.center)
+        if agc_file:
+            args.extend(['--agc-yaml', str(agc_file)])
+        return args
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}@{self.name}'
 
 
 class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
+    pipe: util.Pipe
 
     def __init__(self, name: str, config: collections.abc.MutableMapping):
         KiwiClient.__init__(self, name, config)
@@ -93,7 +95,18 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         }
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        os.close(self.pipe.write)
+        pass
+        # try:
+        #     os.close(self.pipe.write)
+        # except OSError as exc:
+        #     if util.is_bad_file_descriptor(exc):
+        #         # this means that the file was closed elsewhere.
+        #         # in our case, this likely means that the kiwirecorder process ended before we could be called.
+        #         # note this, but we don't need to do anything.
+        #         self.logger.info(f'{exc} on {self.pipe}.')
+        #         # This shouldn't even be necessary. asyncio.get_running_loop().create_task(self.stop())
+        #     else:
+        #         raise
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
@@ -102,7 +115,7 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         return await self.start()
 
     def create_command(self) -> KiwiClientCommand:
-        self.pipe = Pipe(*os.pipe())
+        # self.pipe = Pipe(*os.pipe())
         cmd = self.commandline()
         # self.logger.info(f'CMD: {cmd}')
         command = KiwiClientCommand(
@@ -115,7 +128,7 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
                 'Too busy now. Reconnecting after 15 seconds',
                 'server closed the connection unexpectedly. Reconnecting after 5 seconds',
             ],
-            unrecoverable_errors=['Errno 32.*Broken pipe'],
+            unrecoverable_errors=['Errno 32.*Broken pipe', 'Errno 9.*Bad file descriptor'],
             valid_return_codes=[0, -11, -15],  # -11 is speculative. Some weirdness on odroid
         )
         return command

@@ -124,9 +124,11 @@ class Dumphfdl(BaseDecoder):
         return cmd
 
     def valid_return_codes(self) -> list[int]:
+        # 0 : OK
+        # 1 : ??? seems to be related to pipe or usb problems?
         # -6 : SIGABRT. "The futex facility returned an unexpected error code."
         # -11 is speculative. Some weirdness on odroid
-        return [0, -6, -11, -15]
+        return [0, 1, -6, -11, -15]
 
 
 class IQDecoder(Dumphfdl):
@@ -141,7 +143,8 @@ class IQDecoder(Dumphfdl):
 
 
 class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
-    iq_fd: int
+    pipe: util.Pipe
+    # iq_fd: int
 
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         IQDecoder.__init__(self, name, config, listener)
@@ -153,11 +156,20 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
     def execution_arguments(self) -> dict:
         return {
-            'stdin': self.iq_fd,
+            # 'stdin': self.iq_fd,
+            'stdin': self.pipe.read,
         }
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        os.close(self.iq_fd)
+        pass
+        # try:
+        #     os.close(self.iq_fd)
+        # except OSError as err:
+        #     if util.is_bad_file_descriptor(err):
+        #         logger.warning(f'Caught {err} on FD{self.iq_fd}. Attempting to reset')
+        #         asyncio.get_running_loop().create_task(self.stop())
+        #     else:
+        #         raise
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
         self.channel = channel
@@ -213,7 +225,6 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
         pass
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
-        logger.info(f'asked to listen to {channel!r}')
         self.channel = channel
         return await self.start()
 
@@ -227,9 +238,19 @@ class SoapySDRDecoder(DirectDecoder):
         self.sample_rates = sorted(util.normalize_ranges(config.get('sample-rates', [])))
 
     def listen_args(self) -> list[str]:
+        def fixup(o: Any) -> str:
+            if o is True:
+                return 'true'
+            if o is False:
+                return 'false'
+            s = str(o)
+            if s.lower() in ['true', 'false']:
+                return s.lower()
+            return s
+
         def nested_args(incoming: Mapping | str) -> str:
             if isinstance(incoming, collections.abc.Mapping):
-                return ','.join(f'{k}={v}' for k, v in incoming.items())
+                return ','.join(f'{k}={fixup(v)}' for k, v in incoming.items())
             else:
                 return incoming
         args = []
@@ -266,6 +287,7 @@ class SoapySDRDecoder(DirectDecoder):
         for sample_rate in self.sample_rates:
             if sample_rate_needed <= sample_rate[1]:
                 exact = sample_rate[0] != sample_rate[1]
+                logger.debug(f'sample rate {sample_rate_needed} [{sample_rate[0]}-{sample_rate[1]}] (exact? {exact})')
                 return sample_rate_needed if exact else sample_rate[1]
         else:
             raise ValueError(f'cannot find an acceptable sample rate for needed width {sample_rate_needed}')

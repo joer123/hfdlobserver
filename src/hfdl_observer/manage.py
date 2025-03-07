@@ -125,10 +125,14 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     channel: Optional[data.ObservingChannel]
     last_seen: datetime.datetime
     pings_sent: int = 0
+    weight: int = data.DEFAULT_RECEIVER_WEIGHT
 
-    def __init__(self, name: str, uuid: str, observable_widths: list[int]) -> None:
+    def __init__(
+        self, name: str, uuid: str, observable_widths: list[int], weight: int = data.DEFAULT_RECEIVER_WEIGHT
+    ) -> None:
         self.name = name
         self.uuid = uuid
+        self.weight = weight
         self.observable_channel_widths = observable_widths
         self.channel = None
         self.last_seen = util.now()
@@ -152,12 +156,16 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
 
     def on_remote_listening(self, message: bus.Message) -> None:
         payload: dict = message.payload
-        logger.info(f'{self} remote now listening to {len(payload["frequencies"])} frequencies')
-        self.keepalive()
-        self.channel = self.observing_channel_for(payload['frequencies'])
+        if self.uuid == payload['uuid']:
+            logger.info(f'{self}/{self.uuid} remote now listening to {len(payload["frequencies"])} frequencies')
+            self.keepalive()
+            self.channel = self.observing_channel_for(payload['frequencies'])
+        else:
+            logger.info(f'{self}/{self.uuid} ignoring bad listening notification. ({payload["uuid"]}) {len(payload["frequencies"])} frequencies')
 
-    def on_remote_pong(self, _: bus.Message) -> None:
-        self.keepalive()
+    def on_remote_pong(self, message: bus.Message) -> None:
+        if self.uuid == message.payload.get('src'):
+            self.keepalive()
 
     def __str__(self) -> str:
         return f'{self.name} on {self.channel} ({self.last_seen})'
@@ -168,8 +176,9 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     def listen(self, freqs: list[int]) -> None:
         self.relay('listen', freqs)
 
-    def ping(self) -> None:
-        self.relay('ping', self.uuid)
+    def ping(self, from_uuid: str) -> None:
+        self.pings_sent += 1
+        self.relay('ping', {'dst': self.uuid, 'src': from_uuid})
 
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
@@ -273,17 +282,21 @@ class UniformOrchestrator(AbstractOrchestrator):
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
         return chosen_channels
 
+    def proxy_sort_key(self, proxy: ReceiverProxy) -> tuple[int, int]:
+        return (proxy.weight, -max(proxy.observable_widths()))
+
     def assign_channels(self, channels: list[data.ObservingChannel]) -> None:
         keeps = {}
         starts: list[data.ObservingChannel] = []
-        proxies_by_width = sorted(self.proxies, key=lambda p: max(p.observable_widths()), reverse=True)
-        available = proxies_by_width.copy()
+        ordered_proxies = sorted(self.proxies, key=self.proxy_sort_key, reverse=True)
+        available = ordered_proxies.copy()
         for channel in channels:
-            for receiver in proxies_by_width:
+            for receiver in ordered_proxies:
                 if receiver.covers(channel):
                     logger.debug(f'keeping {receiver}')
                     keeps[receiver.name] = channel
-                    available.remove(receiver)
+                    if receiver in available:
+                        available.remove(receiver)
                     break
             else:
                 logger.debug(f'adding {channel} to starts')
@@ -454,7 +467,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         ))
 
     def add_receiver_proxy(self, proxy: ReceiverProxy) -> None:
-        self.proxies[proxy.name] = (proxy)
+        self.proxies[proxy.name] = proxy
         self.conductor.add_receiver(proxy)
         self.maybe_orchestrate()
 
@@ -518,10 +531,10 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         for name, proxy in self.proxies.items():
             if proxy.last_seen < horizon:
                 if proxy.pings_sent > 3:
-                    logger.warning(f'proxy {name}:{proxy} may be dead.')
-
+                    logger.warning(f'proxy {name}:{proxy} may be dead. Removing.')
+                    self.deregister_remote(proxy.name, proxy.uuid)
                 else:
-                    proxy.ping()
+                    proxy.ping(self.uuid)
 
     def start(self) -> None:
         self.recipient_subscriber.start()
@@ -529,7 +542,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.watchdog.start()
         # reaper is currently not used: self.conductor.reaper.start()
 
-    def register_remote(self, name: str, uuid: str, widths: list[int]) -> None:
+    def register_remote(self, name: str, uuid: str, widths: list[int], weight: int) -> None:
         try:
             old_proxy = self.proxies[name]
         except KeyError:
@@ -539,7 +552,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
                 self.message_broker().publish(bus.Message(old_proxy.target, 'deregister', old_proxy.uuid))
                 self.conductor.remove_receiver(old_proxy)
                 del self.proxies[name]
-        proxy = ReceiverProxy(name, uuid, widths)
+        proxy = ReceiverProxy(name, uuid, widths, weight)
         self.add_receiver_proxy(proxy)
         proxy.registered()
 
@@ -556,7 +569,9 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
 
     def on_remote_register(self, message: bus.Message) -> None:
         payload: dict = message.payload
-        self.register_remote(payload['name'], payload['uuid'], payload['widths'])
+        self.register_remote(
+            payload['name'], payload['uuid'], payload['widths'], payload.get('weight', data.DEFAULT_RECEIVER_WEIGHT)
+        )
 
     def on_remote_deregister(self, message: bus.Message) -> None:
         payload: dict = message.payload

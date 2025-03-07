@@ -222,6 +222,7 @@ defaults = {
     "receivers": {
         "web888": {
             "type": "Web888ExecReceiver",
+            # "sample_rate", 12000
             "client": {
                 "address": "web-888.local",
                 "port": 8073,
@@ -298,10 +299,7 @@ defaults = {
                     1300000,
                     1536000,
                     2048000,
-                    [
-                        2000000,
-                        5000000
-                    ]
+                    [2000000, 5300000],
                 ],
                 "dumphfdl": "default",
                 "soapysdr": {
@@ -321,7 +319,7 @@ defaults = {
             "decoder": {
                 "type": "SoapySDRDecoder",
                 "settle_time": 10,
-                "sample-rates": [1300000, 1536000, 2048000, [2000000, 5000000]],
+                "sample-rates": [1300000, 1536000, 2048000, [2000000, 5500000]],
                 "dumphfdl": "default",
                 "soapysdr": {
                     "driver": "sdrplay"
@@ -339,7 +337,7 @@ defaults = {
             "type": "DirectReceiver",
             "decoder": {
                 "type": "SoapySDRDecoder",
-                "sample-rates": [1300000, 1536000, 2048000, 4000000],
+                "sample-rates": [1300000, 1536000, 2048000, 4000000, 5000000],
                 "dumphfdl": "default",
                 "soapysdr": {
                     "driver": "soapyMiri",

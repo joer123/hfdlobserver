@@ -90,6 +90,14 @@ def normalize_ranges(ranges: list[int | list[int]]) -> list[tuple[int, int]]:
     return result
 
 
+Pipe = collections.namedtuple('Pipe', 'read write')
+
+
+def is_bad_file_descriptor(error: OSError) -> bool:
+    # for now, naive.
+    return 'Errno 9' in str(error)
+
+
 class DeepChainMap(collections.ChainMap):
     def __getitem__(self, key: Any) -> Any:
         values = (mapping[key] for mapping in self.maps if key in mapping)
