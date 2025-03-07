@@ -37,4 +37,4 @@ if [[ ! -r "hfdlobserver888.sh" ]] ; then
     echo "installing backwards compatible symlink"
     ln -s "hfdlobserver.sh" "hfdlobserver888.sh"
 fi
-echo "Migration tasks completed. You should restart `hfdlobserver.sh` in case there are any peculiarities of your install that need addressing."
+echo 'Migration tasks completed. You should restart `hfdlobserver.sh` in case there are any peculiarities of your install that need addressing.'

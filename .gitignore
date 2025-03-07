@@ -1,11 +1,12 @@
 log
+logs
 .env*
 .venv
 .mypy_cache
 .pytest_cache
+__pycache__
 settings.yaml
-settings.yaml.new
-settings.yaml.safe
+settings.yaml.*
 *.state
 
 venv
@@ -13,3 +14,5 @@ kiwiclient
 libacars
 statsd-c-client
 dumphfdl
+Soapy*
+ExtIO*
