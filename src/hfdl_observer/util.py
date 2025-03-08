@@ -101,8 +101,8 @@ class Pipe:
 
     def __init__(self) -> None:
         self.read, self.write = os.pipe()
-        # os.set_inheritable(self.read, True)
-        # os.set_inheritable(self.write, True)
+        os.set_inheritable(self.read, True)
+        os.set_inheritable(self.write, True)
 
     def close_read(self) -> None:
         try:
@@ -150,20 +150,23 @@ class DeepChainMap(collections.ChainMap):
         return d
 
 
+RUNLOOP = None
+
+
 def schedule(coro: Coroutine) -> asyncio.Task:
-    return asyncio.get_running_loop().create_task(coro)
+    return RUNLOOP.create_task(coro)
 
 
 def call_soon(fn: Callable, *args: Any) -> asyncio.Handle:
-    return asyncio.get_running_loop().call_soon(fn, *args)
+    return RUNLOOP.call_soon(fn, *args)
 
 
 def call_later(delay: float, fn: Callable, *args: Any) -> asyncio.TimerHandle:
-    return asyncio.get_running_loop().call_later(delay, fn, *args)
+    return RUNLOOP.call_later(delay, fn, *args)
 
 
 async def cleanup_task(task: asyncio.Task) -> None:
-    if not task.done() and not task.cancelled():
+    if not task.done() and not task.cancelled() and not task.cancelling():
         task.cancel()
     try:
         await task

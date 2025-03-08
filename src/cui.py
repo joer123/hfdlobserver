@@ -658,8 +658,10 @@ class HeatMap:
 
     def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         if not self.task:
-            loop = loop or asyncio.get_running_loop()
-            self.task = loop.create_task(self.run())
+            if loop:
+                self.task = loop.create_task(self.run())
+            else:
+                self.task = util.schedule(self.run())
 
 
 class ConsoleRedirector(rich.console.Console):
@@ -743,8 +745,8 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     ) -> None:
         ticker.register(observer)
         cumulative_line.register(observer, cumulative)
-        asyncio.get_event_loop().create_task(forecaster.run())
-        asyncio.get_event_loop().create_task(display_updater.run())
+        util.schedule(forecaster.run())
+        util.schedule(display_updater.run())
 
     with RichLive(
         display.root, refresh_per_second=SCREEN_REFRESH_RATE, console=console, transient=True, screen=True,

@@ -242,14 +242,18 @@ class Web888ExecReceiver(Web888Receiver):
 
     async def run(self) -> None:
         self.publish_listening()
+        if not self.channel:
+            logger.info(f'{self} channel was empty')
+            return
+        channel = self.channel
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         pipe = util.Pipe()
         self.client.pipe = pipe
         self.decoder.pipe = pipe
         try:
-            asyncio.gather(
-                self.client.listen(self.channel),
-                self.client.when_ready(self.decoder.listen(self.channel))
+            await asyncio.gather(
+                self.client.listen(channel),
+                self.client.when_ready(self.decoder.listen(channel)),
             )
         except asyncio.CancelledError:
             pass
@@ -257,7 +261,8 @@ class Web888ExecReceiver(Web888Receiver):
             logger.error(f'{self} encountered an error', exc_info=err)
         finally:
             pipe.close()
-            self.clear
+            if channel == self.channel:
+                self.clear()
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')
@@ -324,15 +329,17 @@ class DirectReceiver(LocalReceiver):
 
     async def run(self) -> None:
         self.publish_listening()
+        channel = self.channel
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         try:
-            await self.decoder.listen(self.channel)
+            await self.decoder.listen(channel)
         except asyncio.CancelledError:
             pass
         except Exception as err:
             logger.error(f'{self} encountered an error', exc_info=err)
         finally:
-            self.clear()
+            if channel == self.channel:
+                self.clear()
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')

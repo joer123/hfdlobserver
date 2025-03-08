@@ -164,6 +164,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
                 network.set_receiver_for_frequency(frequency, self.name)
         else:
             logger.info(f'{self} bad listening notification. ({payload["uuid"]}) {len(frequencies)} frequencies')
+            self.pings_sent += 1  # penalize me.
 
     def on_remote_pong(self, message: bus.Message) -> None:
         if self.uuid == message.payload.get('src'):

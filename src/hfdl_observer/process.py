@@ -139,7 +139,6 @@ class Command:
                 self.logger.debug('execution context freed')
         except Exception as e:
             self.logger.error('encountered an error', exc_info=e)
-            raise
         finally:
             self.logger.debug('run completed')
             self.task = None
@@ -159,7 +158,7 @@ class Command:
                 await self.kill(process)
                 self.process_logger.info('kill completed')
             except ProcessLookupError as e:
-                self.process_logger.warning('problem', exc_info=e)
+                self.process_logger.warning(f'problem terminating: {e}')
         else:
             self.process_logger.debug('no process, cannot terminate.')
         return task
@@ -176,7 +175,7 @@ class Command:
                     await asyncio.wait_for(task, timeout=3)
                     self.process_logger.info('process kill returned')
             except ProcessLookupError as e:
-                self.process_logger.warning('problem', exc_info=e)
+                self.process_logger.warning(f'problem killing: {e}')
         else:
             self.process_logger.debug('no process, cannot kill.')
         return task

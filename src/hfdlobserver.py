@@ -162,15 +162,12 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
                     last_snapshot = snapshot
     except asyncio.CancelledError:
         logger.error('Observer loop cancelled')
-        await observer.kill()
-
-
-def cancel_all_tasks() -> None:
-    try:
-        for t in asyncio.all_tasks():
-            t.cancel()
-    except RuntimeError:
-        pass
+        try:
+            await observer.kill()
+        except asyncio.CancelledError:
+            logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
+        except RecursionError:
+            logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
 
 
 def observe(
@@ -187,28 +184,32 @@ def observe(
     bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...
 
     observer: HFDLObserverController | HFDLObserverNode
-    if as_controller:
-        message_broker = zero.ZeroBroker(**broker_config)
-        message_broker.start()  # daemon thread, not async.
-        network.UPDATER = orm.NetworkUpdater()
-        observer = HFDLObserverController(settings)
-        cumulative = network.CumulativePacketStats()
-        observer.subscribe('packet', cumulative.on_hfdl)
-        if on_observer:
-            on_observer(observer, cumulative)
-        else:
-            # initialize headless
-            observer.network_overview.subscribe('state', observer.ministats)
-    else:  # just a node for receivers.
-        observer = HFDLObserverNode(settings)
 
     try:
         with Runner() as runner:
+            util.RUNLOOP = runner.get_loop()  # FIXME, this needs a better solution.
+
+            if as_controller:
+                message_broker = zero.ZeroBroker(**broker_config)
+                message_broker.start()  # daemon thread, not async.
+                network.UPDATER = orm.NetworkUpdater()
+                observer = HFDLObserverController(settings)
+                cumulative = network.CumulativePacketStats()
+                observer.subscribe('packet', cumulative.on_hfdl)
+                if on_observer:
+                    on_observer(observer, cumulative)
+                else:
+                    # initialize headless
+                    observer.network_overview.subscribe('state', observer.ministats)
+            else:  # just a node for receivers.
+                observer = HFDLObserverNode(settings)
             runner.run(async_observe(observer))
+
         logger.info("HFDLObserver done.")
+    except asyncio.CancelledError:
+        pass
     except Exception as exc:
         logger.error("Fatal error encountered", exc_info=exc)
-        raise
     finally:
         logger.info('HFDLObserver exiting.')
 

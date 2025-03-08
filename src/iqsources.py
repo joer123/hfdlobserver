@@ -115,7 +115,11 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
                 'Too busy now. Reconnecting after 15 seconds',
                 'server closed the connection unexpectedly. Reconnecting after 5 seconds',
             ],
-            unrecoverable_errors=['Errno 32.*Broken pipe', 'Errno 9.*Bad file descriptor'],
+            unrecoverable_errors=[
+                'Errno 9.*Bad file descriptor',
+                'Errno 22.*Invalid argument',
+                'Errno 32.*Broken pipe',
+            ],
             valid_return_codes=[0, -11, -15],  # -11 is speculative. Some weirdness on odroid
         )
         return command
@@ -127,8 +131,13 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         return self.command.running_condition
 
     async def when_ready(self, awaitable: Awaitable) -> None:
-        async with self.running_condition:
-            await awaitable
+        try:
+            async with self.running_condition:
+                await self.running_condition.wait()
+                self.pipe.close_write()
+                await awaitable
+        except asyncio.CancelledError:
+            pass
 
 
 class Web888ClientProcess(KiwiClientProcess):
