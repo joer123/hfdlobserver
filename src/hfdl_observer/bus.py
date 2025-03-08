@@ -14,6 +14,7 @@ from typing import Any, AsyncGenerator, Callable, Optional, Union
 
 import requests
 
+import hfdl_observer.util as util
 import hfdl_observer.zero as zero
 
 Message = zero.Message
@@ -28,7 +29,7 @@ class RemoteSubscriber(zero.ZeroSubscriber):
     task: asyncio.Task
 
     def start(self) -> asyncio.Task:
-        self.task = asyncio.get_running_loop().create_task(self.run())
+        self.task = util.schedule(self.run())
         return self.task
 
 
@@ -51,7 +52,7 @@ class RemoteBroker:
 
     def publish(self, message: Message) -> None:
         logger.debug(f'queuing {message}')
-        asyncio.get_running_loop().create_task(self._publisher.publish(message))
+        util.schedule(self._publisher.publish(message))
 
     async def publish_now(self, message: Message) -> None:
         logger.debug(f'pushing {message}')
@@ -142,7 +143,7 @@ class PeriodicTask():
 
     def start(self) -> None:
         if not hasattr(self, 'task'):
-            self.task = asyncio.get_running_loop().create_task(self.run())
+            self.task = util.schedule(self.run())
 
     async def stop(self) -> None:
         task = getattr(self, 'task')

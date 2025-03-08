@@ -4,14 +4,19 @@
 # TL;DR: BSD 3-clause
 #
 
+import asyncio
 import collections
 import collections.abc
 import datetime
 import json
+import logging
 import math
+import os
 import re
 
-from typing import Any, Union
+from typing import Any, Callable, Coroutine, Union
+
+logger = logging.getLogger(__name__)
 
 
 def tobool(val: Union[bool, str, int]) -> bool:
@@ -90,7 +95,30 @@ def normalize_ranges(ranges: list[int | list[int]]) -> list[tuple[int, int]]:
     return result
 
 
-Pipe = collections.namedtuple('Pipe', 'read write')
+class Pipe:
+    read: int
+    write: int
+
+    def __init__(self) -> None:
+        self.read, self.write = os.pipe()
+        # os.set_inheritable(self.read, True)
+        # os.set_inheritable(self.write, True)
+
+    def close_read(self) -> None:
+        try:
+            os.close(self.read)
+        except OSError:
+            pass
+
+    def close_write(self) -> None:
+        try:
+            os.close(self.write)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        self.close_write()
+        self.close_read()
 
 
 def is_bad_file_descriptor(error: OSError) -> bool:
@@ -120,3 +148,26 @@ class DeepChainMap(collections.ChainMap):
             elif isinstance(v, list):
                 d[k] = list(e.dict() if hasattr(e, 'dict') else e for e in v)
         return d
+
+
+def schedule(coro: Coroutine) -> asyncio.Task:
+    return asyncio.get_running_loop().create_task(coro)
+
+
+def call_soon(fn: Callable, *args: Any) -> asyncio.Handle:
+    return asyncio.get_running_loop().call_soon(fn, *args)
+
+
+def call_later(delay: float, fn: Callable, *args: Any) -> asyncio.TimerHandle:
+    return asyncio.get_running_loop().call_later(delay, fn, *args)
+
+
+async def cleanup_task(task: asyncio.Task) -> None:
+    if not task.done() and not task.cancelled():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning(f'{task} produced {exc} on cleanup')

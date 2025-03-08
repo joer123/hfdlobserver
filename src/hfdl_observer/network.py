@@ -373,4 +373,12 @@ class StationLookup:
 
 STATIONS = StationLookup()
 UPDATER = AbstractNetworkUpdater()  # Must be overridden on initialization of the main task
+RECEIVER_FREQUENCIES: dict[int, str] = {}
 
+
+def receiver_for(frequency: int) -> str:
+    return RECEIVER_FREQUENCIES.get(frequency, 'unknown')
+
+
+def set_receiver_for_frequency(frequency: int, receiver: str) -> None:
+    RECEIVER_FREQUENCIES[frequency] = receiver

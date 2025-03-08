@@ -9,7 +9,6 @@ import asyncio.subprocess
 import collections
 import collections.abc
 import logging
-import os
 import random
 
 from typing import Any, Callable, Mapping, Optional
@@ -47,13 +46,13 @@ class BaseDecoder:
     def station_id(self) -> Optional[str]:
         return self.config.get('station_id', None)
 
-    async def start(self) -> asyncio.Task:
+    async def start(self) -> None:
         raise NotImplementedError()
 
-    async def stop(self) -> Optional[asyncio.Task]:
+    async def stop(self) -> None:
         raise NotImplementedError()
 
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
         raise NotImplementedError()
 
     def __str__(self) -> str:
@@ -135,16 +134,15 @@ class IQDecoder(Dumphfdl):
     def listen_args(self) -> list[str]:
         return [
             '--iq-file', '-',
-            '--sample-rate', str(self.channel.allowed_width * 1000),
+            '--sample-rate', str(self.channel.allowed_width_hz),
             '--sample-format', 'CS16',
             '--read-buffer-size', '9600',
-            '--centerfreq', str(self.channel.center),
+            '--centerfreq', str(self.channel.center_khz),
         ]
 
 
 class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
     pipe: util.Pipe
-    # iq_fd: int
 
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         IQDecoder.__init__(self, name, config, listener)
@@ -156,24 +154,15 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
     def execution_arguments(self) -> dict:
         return {
-            # 'stdin': self.iq_fd,
             'stdin': self.pipe.read,
         }
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        pass
-        # try:
-        #     os.close(self.iq_fd)
-        # except OSError as err:
-        #     if util.is_bad_file_descriptor(err):
-        #         logger.warning(f'Caught {err} on FD{self.iq_fd}. Attempting to reset')
-        #         asyncio.get_running_loop().create_task(self.stop())
-        #     else:
-        #         raise
+        self.pipe.close_read()
 
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
         self.channel = channel
-        return await self.start()
+        await self.start()
 
     def create_command(self) -> IQDecoderCommand:
         cmd = self.commandline()
@@ -190,11 +179,11 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
 
 
 class DummyDecoder(IQDecoderProcess):
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
         self.channel = channel
         logger.debug(f'{self} command {self.commandline()}')
         logger.debug(f'{self} listening on {channel}')
-        return asyncio.get_running_loop().create_task(asyncio.sleep(0.1))
+        await asyncio.sleep(0.1)
 
 
 class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
@@ -224,9 +213,9 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
         pass
 
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
         self.channel = channel
-        return await self.start()
+        await self.start()
 
     def observable_channel_widths(self) -> list[int]:
         raise NotImplementedError(str(self.__class__))
@@ -283,7 +272,7 @@ class SoapySDRDecoder(DirectDecoder):
 
     def best_sample_rate(self) -> int:
         # sample rate handling is special; the config value is a list of range-or-values. We have to pick the "best".
-        sample_rate_needed = int(self.channel.width / float(self.config.get('shoulder', 1.0))) * 1000
+        sample_rate_needed = int(self.channel.width_hz / float(self.config.get('shoulder', 1.0)))
         for sample_rate in self.sample_rates:
             if sample_rate_needed <= sample_rate[1]:
                 exact = sample_rate[0] != sample_rate[1]
@@ -294,7 +283,7 @@ class SoapySDRDecoder(DirectDecoder):
 
     def observable_channel_widths(self) -> list[int]:
         shoulder = self.config.get('shoulder', 1.0)
-        return [int((hi * shoulder) / 1000) for lo, hi in self.sample_rates]
+        return [int(hi * shoulder) for lo, hi in self.sample_rates]
 
 
 class RX888mk2Decoder(SoapySDRDecoder):
@@ -304,7 +293,7 @@ class RX888mk2Decoder(SoapySDRDecoder):
         sample_rate = self.best_sample_rate()
         # There is an edge case where rounding to a MHz will put some frequencies into the shoulder. I think this is
         # probably okay. but warn anyways.
-        pure_center = self.channel.center  # khz
+        pure_center = self.channel.center_khz
         actual_center = int(round(pure_center / 1000.0) * 1000)
         # check for shoulders.
         shoulder = float(self.config.get('shoulder', 1.0)) * sample_rate / 2.0

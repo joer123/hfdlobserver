@@ -498,7 +498,7 @@ class HeatMapByAgentFormatter(AbstractHeatMapFormatter[heat.TableByAgent]):
         return (f' {header.label: >17} ', style)
 
 
-class HeatMapByReceiverFormatter(AbstractHeatMapFormatter[heat.TableByFrequencySet]):
+class HeatMapByReceiverFormatter(AbstractHeatMapFormatter[heat.TableByReceiver]):
     def __init__(
         self,
         bin_size: int,
@@ -506,11 +506,7 @@ class HeatMapByReceiverFormatter(AbstractHeatMapFormatter[heat.TableByFrequencyS
         proxies: list[manage.ReceiverProxy],
     ) -> None:
         self.bin_size = bin_size
-        frequency_sets = {}
-        for proxy in proxies:
-            if proxy.channel is not None:
-                frequency_sets.update({f: proxy.name for f in proxy.channel.frequencies or []})
-        self.source = heat.TableByFrequencySet(self.bin_size, num_bins, frequency_sets)
+        self.source = heat.TableByReceiver(self.bin_size, num_bins)
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]

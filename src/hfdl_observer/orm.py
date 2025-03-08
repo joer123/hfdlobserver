@@ -104,6 +104,7 @@ class ReceivedPacket(DbEntity):  # type: ignore
     uplink = pony.orm.Required(bool)
     latitude = pony.orm.Optional(float)
     longitude = pony.orm.Optional(float)
+    receiver = pony.orm.Required(str)
     # select when // 60, frequency, count(*) from ReceivedPacket where when > ? group by when // 60, frequency
     pony.orm.PrimaryKey(when, frequency)
 
@@ -264,6 +265,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
             uplink=packet_info.is_uplink,
             latitude=position[0],
             longitude=position[1],
+            receiver=network.receiver_for(packet_info.frequency),
         )
         db.commit()
 
@@ -339,4 +341,14 @@ class PacketWatcher(data.AbstractPacketWatcher):
         for packet in cls.recent_packets(when):
             bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
             data[frequency_sets.get(packet.frequency, str(packet.frequency))][bin_number] += 1
+        return data
+
+    @pony.orm.db_session(strict=True)
+    def packets_by_receiver(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+        data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
+        total_seconds = bin_size * num_bins
+        when = util.now() - datetime.timedelta(seconds=total_seconds)
+        for packet in cls.recent_packets(when):
+            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+            data[packet.receiver][bin_number] += 1
         return data

@@ -15,6 +15,8 @@ from typing import Any, Callable, Optional
 import zmq
 import zmq.asyncio
 
+import hfdl_observer.util as util
+
 Context = zmq.asyncio.Context
 GLOBAL_CONTEXT = Context.instance()
 logger = logging.getLogger(__name__)
@@ -107,7 +109,7 @@ class ZeroSubscriber:
                 logger.debug(f'received {message}')
                 for filter, callback in self.callbacks:
                     if not filter or filter(message):
-                        asyncio.get_running_loop().call_soon(callback, message)
+                        util.call_soon(callback, message)
         finally:
             # logger.info(f'no longer subscribed to {self.url}/{self.channel}')
             self.socket.setsockopt(zmq.LINGER, 0)

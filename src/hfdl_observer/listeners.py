@@ -16,6 +16,7 @@ from typing import Any, Callable, Union
 import hfdl_observer.bus
 import hfdl_observer.data
 import hfdl_observer.hfdl
+import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ class UDPProtocol(asyncio.protocols.BaseProtocol):
                 logger.info(f"packet {packet}")
                 # self.on_hfdl(packet)
                 for consumer in self.consumers:
-                    asyncio.get_running_loop().call_soon(consumer.consume, line, packet)
+                    util.call_soon(consumer.consume, line, packet)
         if tail and len(tail) < 65536:  # primitive/naive stuffing check.
             self.buffers[addr] = tail
         else:
@@ -120,7 +121,7 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
             logger.warn('Missing HFDL Listener configuration, not starting one.')
         else:
             self.running = True
-            asyncio.get_running_loop().create_task(self.run(hfdl_consumers))
+            util.schedule(self.run(hfdl_consumers))
 
     def stop(self) -> None:
         if self.transport:

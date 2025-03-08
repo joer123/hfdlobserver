@@ -75,9 +75,8 @@ class NetworkOverview(bus.LocalPublisher):
 
     def start(self) -> None:
         logger.info('starting network overview')
-        loop = asyncio.get_running_loop()
         for startable in self.startables:
-            self.tasks.append(loop.create_task(startable()))
+            self.tasks.append(util.schedule(startable()))
 
     async def stop(self) -> None:
         for task in self.tasks:
@@ -86,7 +85,7 @@ class NetworkOverview(bus.LocalPublisher):
     def schedule_save(self, _: Any) -> None:
         if not self.will_save:
             self.will_save = True
-            asyncio.get_running_loop().call_later(self.config['save_delay'], self.save)
+            util.call_later(self.config['save_delay'], self.save)
         self.publish('frequencies', {s.station_id: s.frequencies for s in self.updater.current()})
 
     def save(self) -> None:
@@ -156,19 +155,22 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
 
     def on_remote_listening(self, message: bus.Message) -> None:
         payload: dict = message.payload
+        frequencies: list[int] = payload["frequencies"]
         if self.uuid == payload['uuid']:
-            logger.info(f'{self}/{self.uuid} remote now listening to {len(payload["frequencies"])} frequencies')
+            logger.info(f'{self} remote now listening to {len(frequencies)} frequencies')
             self.keepalive()
-            self.channel = self.observing_channel_for(payload['frequencies'])
+            self.channel = self.observing_channel_for(frequencies)
+            for frequency in frequencies or []:
+                network.set_receiver_for_frequency(frequency, self.name)
         else:
-            logger.info(f'{self}/{self.uuid} ignoring bad listening notification. ({payload["uuid"]}) {len(payload["frequencies"])} frequencies')
+            logger.info(f'{self} bad listening notification. ({payload["uuid"]}) {len(frequencies)} frequencies')
 
     def on_remote_pong(self, message: bus.Message) -> None:
         if self.uuid == message.payload.get('src'):
             self.keepalive()
 
     def __str__(self) -> str:
-        return f'{self.name} on {self.channel} ({self.last_seen})'
+        return f'{self.name}/{self.uuid} on {self.channel} ({self.last_seen})'
 
     def die(self) -> None:
         self.relay('die', self.uuid)
@@ -302,18 +304,9 @@ class UniformOrchestrator(AbstractOrchestrator):
                 logger.debug(f'adding {channel} to starts')
                 starts.append(channel)
 
-        # available: list[ReceiverProxy] = []
-        # for receiver in proxies_by_width:
-        #     if receiver.name in keeps:
-        #         logger.debug(f'keeping {receiver}')
-        #     else:
-        #         logger.debug(f'marking {receiver} available')
-        #         available.append(receiver)
-        # available.sort(key=lambda a: max(a.observable_widths()))
-
         for channel in starts:
             for receiver in available:
-                if max(receiver.observable_widths()) >= channel.width:
+                if max(receiver.observable_widths()) >= channel.width_hz:
                     if receiver.channel:
                         self.reaper.remove_channel(receiver.channel)
                         receiver_freqs = receiver.channel.frequencies
@@ -367,7 +360,7 @@ class DiverseOrchestrator(UniformOrchestrator):
         for proxy in self.proxies:
             actual_channels.append(data.ObservingChannel(max(proxy.observable_widths()), []))
 
-        actual_channels.sort(key=lambda e: e.allowed_width, reverse=True)
+        actual_channels.sort(key=lambda e: e.allowed_width_hz, reverse=True)
 
         # merge the atomic channels into the possible proxy channels.
         for channel in channels:
@@ -405,7 +398,7 @@ class Reaper(bus.LocalPublisher):
 
     @functools.cached_property
     def task(self) -> asyncio.Task:
-        return asyncio.get_running_loop().create_task(self.run())
+        return util.schedule(self.run())
 
     def start(self) -> asyncio.Task:
         return self.task
@@ -475,17 +468,17 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         delay = self.config.get('delay', 10)
         next_orchestrate = self.last_orchestrated + datetime.timedelta(seconds=delay)
         current_task = asyncio.current_task()
-        if current_task == self.orchestration_task:
+        if current_task and current_task == self.orchestration_task:
             self.orchestrate()
         elif self.orchestration_task is None:
             if next_orchestrate <= util.now():
-                logger.info('orchestrating soon')
-                self.orchestration_task = asyncio.get_running_loop().call_soon(self.orchestrate)
+                logger.debug('orchestrating soon')
+                self.orchestration_task = util.call_soon(self.orchestrate)
             else:
-                logger.info(f'orchestrating in {delay}s')
-                self.orchestration_task = asyncio.get_running_loop().call_later(delay, self.maybe_orchestrate)
+                logger.debug(f'orchestrating in {delay}s')
+                self.orchestration_task = util.call_later(delay, self.orchestrate)
         else:
-            logger.info(f'not orchestrating... {self.orchestration_task}')
+            logger.debug(f'not orchestrating... {self.orchestration_task}')
 
     def orchestrate(self) -> None:
         self.last_orchestrated = util.now()

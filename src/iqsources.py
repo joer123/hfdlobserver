@@ -8,11 +8,10 @@ import asyncio
 import collections
 import collections.abc
 import logging
-import os
 import pathlib
 import random
 
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 import hfdl_observer.data
 import hfdl_observer.env as env
@@ -62,14 +61,14 @@ class KiwiClient:
             '--log', 'info',
             '-s', self.config['address'],
             '-p', str(self.config['port']),
-            '-f', str(self.channel.center),
+            '-f', str(self.channel.center_khz),
             '-m', 'iq',
             '-L', '-8000', '-H', '8000',
             '--OV',
             '--user', self.config['username'],
             # '--tlimit', '120',
         ]
-        agc_file = self.agc_file(self.channel.center)
+        agc_file = self.agc_file(self.channel.center_khz)
         if agc_file:
             args.extend(['--agc-yaml', str(agc_file)])
         return args
@@ -95,24 +94,12 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         }
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        pass
-        # try:
-        #     os.close(self.pipe.write)
-        # except OSError as exc:
-        #     if util.is_bad_file_descriptor(exc):
-        #         # this means that the file was closed elsewhere.
-        #         # in our case, this likely means that the kiwirecorder process ended before we could be called.
-        #         # note this, but we don't need to do anything.
-        #         self.logger.info(f'{exc} on {self.pipe}.')
-        #         # This shouldn't even be necessary. asyncio.get_running_loop().create_task(self.stop())
-        #     else:
-        #         raise
+        self.pipe.close_write()
 
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> asyncio.Task:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
         self.channel = channel
         logger.debug(f'{self} starting {channel}')
-        logger.debug(f'{self} {self.commandline()}')
-        return await self.start()
+        await self.start()
 
     def create_command(self) -> KiwiClientCommand:
         # self.pipe = Pipe(*os.pipe())
@@ -138,6 +125,10 @@ class KiwiClientProcess(hfdl_observer.process.ProcessHarness, KiwiClient):
         if not self.command:
             raise ValueError('Inconsistent state. Asking for a Running Condition with no Command')
         return self.command.running_condition
+
+    async def when_ready(self, awaitable: Awaitable) -> None:
+        async with self.running_condition:
+            await awaitable
 
 
 class Web888ClientProcess(KiwiClientProcess):

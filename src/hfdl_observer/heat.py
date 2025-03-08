@@ -209,3 +209,9 @@ class TableByFrequencySet(Table):
         # this is tough, since the receiver data is indirect, linked by frequency
         packets = data.PACKET_WATCHER.packets_by_frequency_set(bin_size, num_bins, frequency_sets)
         super().__init__(packets, bin_size)
+
+
+class TableByReceiver(Table):
+    def __init__(self, bin_size: int, num_bins: int) -> None:
+        packets = data.PACKET_WATCHER.packets_by_receiver(bin_size, num_bins)
+        super().__init__(packets, bin_size)

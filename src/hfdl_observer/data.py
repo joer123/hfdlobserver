@@ -28,40 +28,49 @@ class ListenerConfig:
 
 class ObservingChannel:
     _frequencies: set[int]
-    allowed_width: int
+    allowed_width_hz: int
 
-    def __init__(self, allowed_width: int, frequencies: Optional[list[int]] = None):
-        self.allowed_width = allowed_width
+    def __init__(self, allowed_width_hz: int, frequencies: Optional[list[int]] = None):
+        self.allowed_width_hz = int(allowed_width_hz)
         self._frequencies = set(frequencies) if frequencies else set()
 
     @property
-    def min(self) -> float:
+    def min_khz(self) -> int:
         return min(self._frequencies)
 
     @property
-    def max(self) -> float:
+    def min_hz(self) -> int:
+        return int(self.min_khz * 1000)
+
+    @property
+    def max_khz(self) -> int:
         return max(self._frequencies)
 
     @property
-    def center(self) -> float:
-        return (self.min + self.max) / 2.0
+    def max_hz(self) -> int:
+        return int(self.max_khz * 1000)
 
     @property
-    def width(self) -> float:
+    def center_khz(self) -> float:
+        return (self.min_khz + self.max_khz) / 2.0
+
+    @property
+    def width_hz(self) -> int:
         if self.frequencies:
-            channel_width: float = hfdl.HFDL_CHANNEL_WIDTH
-            return self.max - self.min + channel_width
+            channel_width = hfdl.HFDL_CHANNEL_WIDTH
+            return self.max_hz - self.min_hz + channel_width
         else:
-            return 0.0
+            return 0
 
     @property
     def frequencies(self) -> list[int]:
         return sorted(self._frequencies)
 
     def maybe_add(self, frequency: int) -> bool:
-        peephole_width = self.allowed_width - hfdl.HFDL_CHANNEL_WIDTH
+        peephole_width = self.allowed_width_hz - hfdl.HFDL_CHANNEL_WIDTH
+        freq_hz = frequency * 1000
         if not self._frequencies or (
-            abs(frequency - self.min) <= peephole_width and abs(frequency - self.max) <= peephole_width
+            abs(freq_hz - self.min_hz) <= peephole_width and abs(freq_hz - self.max_hz) <= peephole_width
         ):
             self._frequencies.add(frequency)
             return True
@@ -69,19 +78,19 @@ class ObservingChannel:
 
     def maybe_add_all(self, frequencies: list[int]) -> bool:
         # all or nothing.
-        peephole_width = self.allowed_width - hfdl.HFDL_CHANNEL_WIDTH
-        min_freq = min(frequencies)
-        max_freq = max(frequencies)
+        peephole_width = self.allowed_width_hz - hfdl.HFDL_CHANNEL_WIDTH
+        min_freq_hz = min(frequencies) * 1000
+        max_freq_hz = max(frequencies) * 1000
         if not self._frequencies or (
-            abs(min_freq - self.min) <= peephole_width and abs(min_freq - self.max) <= peephole_width
-            and abs(max_freq - self.min) <= peephole_width and abs(max_freq - self.max) <= peephole_width
+            abs(min_freq_hz - self.min_hz) <= peephole_width and abs(min_freq_hz - self.max_hz) <= peephole_width
+            and abs(max_freq_hz - self.min_hz) <= peephole_width and abs(max_freq_hz - self.max_hz) <= peephole_width
         ):
             self._frequencies |= set(frequencies)
             return True
         return False
 
     def clone(self) -> 'ObservingChannel':
-        return ObservingChannel(self.allowed_width, self.frequencies)
+        return ObservingChannel(self.allowed_width_hz, self.frequencies)
 
     def matches(self, other: 'ObservingChannel') -> bool:
         return other is not None and self._frequencies == other._frequencies
@@ -90,7 +99,7 @@ class ObservingChannel:
         return f'{self.frequencies}'
 
     def __repr__(self) -> str:
-        return f'ObservingChannel({self.allowed_width}, {self.frequencies})'
+        return f'ObservingChannel({self.allowed_width_hz}, {self.frequencies})'
 
 
 class ChannelObserver:
@@ -100,7 +109,9 @@ class ChannelObserver:
     def width_for(self, frequencies: list[int]) -> int:
         if not frequencies:
             return 0
-        needed = max(hfdl.HFDL_CHANNEL_WIDTH, max(frequencies) - min(frequencies))
+        max_hz = max(frequencies) * 1000
+        min_hz = min(frequencies) * 1000
+        needed = max(hfdl.HFDL_CHANNEL_WIDTH, max_hz - min_hz)
         widths = sorted(self.observable_widths(), reverse=True)
         for available_width in widths:
             if needed <= available_width:
@@ -120,6 +131,7 @@ class ReceivedPacket:
     uplink: bool
     latitude: Optional[float]
     longitude: Optional[float]
+    receiver: str
     kind: Optional[str] = None
 
 
@@ -156,6 +168,9 @@ class AbstractPacketWatcher:
     def packets_by_frequency_set(
         cls, bin_size: int, num_bins: int, frequency_sets: dict[int, str]
     ) -> BinnedPacketDataType:
+        raise NotImplementedError(str(cls))
+
+    def packets_by_receiver(cls, bin_size: int, num_bins: int) -> BinnedPacketDataType:
         raise NotImplementedError(str(cls))
 
 

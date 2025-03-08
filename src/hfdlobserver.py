@@ -14,7 +14,7 @@ import logging.handlers
 import pathlib
 import sys
 
-from signal import SIGINT, SIGTERM
+# from signal import SIGINT, SIGTERM
 from typing import Any, Callable, Coroutine, Optional
 
 import click
@@ -33,6 +33,11 @@ import hfdl_observer.zero as zero
 import hfdl_observer.orm as orm
 
 import receivers
+
+if sys.version_info < (3, 11):
+    from backports.asyncio.runner import Runner
+else:
+    from asyncio import Runner
 
 
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
@@ -148,8 +153,8 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
                     snapshot = tracemalloc.take_snapshot()
                     try:
                         diff = snapshot.compare_to(last_snapshot, 'lineno')
-                        for entry in diff:
-                            f.write(f'{entry.size} | {entry.size_diff} | {" ".join(str(x) for x in entry.traceback.format(1))}\n')
+                        for e in diff:
+                            f.write(f'{e.size} | {e.size_diff} | {" ".join(str(x) for x in e.traceback.format(1))}\n')
                     except Exception as err:
                         logger.error('error in tracemallocery', exc_info=err)
                     else:
@@ -175,7 +180,6 @@ def observe(
     ], None]] = None,
     as_controller: bool = True
 ) -> None:
-    loop = asyncio.get_event_loop()
     key = 'observer' if as_controller else 'node'
     settings = getattr(hfdl_observer.settings, key)
     broker_config = settings.get('messaging', {})
@@ -198,29 +202,15 @@ def observe(
     else:  # just a node for receivers.
         observer = HFDLObserverNode(settings)
 
-    main_task = asyncio.ensure_future(async_observe(observer))
-    for signal in [SIGINT, SIGTERM]:
-        loop.add_signal_handler(signal, cancel_all_tasks)
     try:
-        loop.run_until_complete(main_task)
-        # try:
-        #     loop.run_until_complete(main_task)
-        #     tasks = Task.all_tasks()
-        #     for t in [t for t in tasks if not (t.done() or t.cancelled())]:
-        #         # give canceled tasks the last chance to run
-        #         loop.run_until_complete(t)
-        # finally:
-        #     loop.close()
-
+        with Runner() as runner:
+            runner.run(async_observe(observer))
         logger.info("HFDLObserver done.")
     except Exception as exc:
         logger.error("Fatal error encountered", exc_info=exc)
         raise
     finally:
-        logger.info('HFDLObserver loop closing')
-        cancel_all_tasks()
-        loop.close()
-        sys.exit()
+        logger.info('HFDLObserver exiting.')
 
 
 def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> None:

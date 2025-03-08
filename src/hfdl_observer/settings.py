@@ -222,7 +222,7 @@ defaults = {
     "receivers": {
         "web888": {
             "type": "Web888ExecReceiver",
-            # "sample_rate", 12000
+            # "channel_width", 12000
             "client": {
                 "address": "web-888.local",
                 "port": 8073,
@@ -230,7 +230,6 @@ defaults = {
                 "settle_time": 1,
                 "quiet": False,
                 "username": "kiwi:hfdlobserver",
-                "channel_width": 12000,
                 "agc_files": {
                     "*": "agc.yaml",
                     "2": "agc-02M.yaml",

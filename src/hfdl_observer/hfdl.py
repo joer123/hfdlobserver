@@ -9,7 +9,7 @@ import logging
 from typing import Any, Optional, Union
 
 
-HFDL_CHANNEL_WIDTH: float = 2.4
+HFDL_CHANNEL_WIDTH: int = 2400  # hz
 HFDL_FRAME_TIME = 32
 
 

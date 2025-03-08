@@ -6,3 +6,4 @@ requests
 rich
 whiptail-dialogs
 pyzmq
+backports.asyncio.runner; python_version < '3.11'

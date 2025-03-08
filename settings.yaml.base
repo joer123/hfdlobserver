@@ -1,28 +1,10 @@
 observer:
   conductor: {}
-  tracker:
-    station_updates: 
-      - url: "https://hfdl.observer/active.json"
-        period: 61
-  all_receivers:
-    observer-01: {}
-    observer-02: {}
-    observer-03: {}
-    observer-04: {}
-    observer-05: {}
-    observer-06: {}
-    observer-07: {}
-    observer-08: {}
-    observer-09: {}
-    observer-10: {}
-    observer-11: {}
-    observer-12: {}
-    observer-13: {}
-configs:
-  decoder:
-    default: {}
-  client:
-    default:
-      recorder_path: 'kiwiclient/kiwirecorder.py'
-      address: web-888.local
-      port: 8073
+cui:
+  ticker:
+    show_all_active: no
+    show_active_line: yes
+    show_targetting: no
+    show_confidence: yes
+    show_quiet: no
+    display_mode: frequency

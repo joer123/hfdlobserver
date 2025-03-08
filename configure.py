@@ -35,6 +35,10 @@ settings = yaml.safe_load(pathlib.Path('settings.yaml.base').read_text())
 
 w = Whiptail('Configure HFDL Observer', backtitle='A multi-headed dumphfdl receiver')
 
+w.msgbox("Unfortunately, this tool needs a major update due to changes in configuration management. This has not yet been completed, so this tool will exit now.")
+
+sys.exit(0)
+
 w.msgbox("""Welcome to HFDL Observer. Let's set up a simple configuration.
 
 Web-888 can provide 13 streams of IQ data. HFDL Observer takes advantage of these to listen to as many useful HFDL frequencies as possible at any given time. In order to pick the right frequencies, you need to configure a prioritized list of station IDs.
