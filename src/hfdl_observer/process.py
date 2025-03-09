@@ -11,7 +11,7 @@ import re
 import shlex
 
 from copy import copy
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 import logging
 
@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class Command:
-    process: asyncio.subprocess.Process
+    process: Optional[asyncio.subprocess.Process] = None
+    execution_event: Optional[asyncio.Event] = None
     killed: bool = False
     terminated: bool = False
-    task: Optional[asyncio.Task] = None
+    executor: Optional[Awaitable] = None
     unrecoverable_errors: list[str]
     recoverable_errors: list[str]
     recoverable_error_count: int = 0
@@ -73,10 +74,11 @@ class Command:
         yield None
 
     async def execute(self) -> None:
-        if self.task:
-            raise Exception('Command has already been run.')
+        if self.execution_event:
+            self.logger.warning('Command has been executed, joining its execution')
+            await self.execution_event.wait()
+        self.execution_event = asyncio.Event()
         self.logger.debug('executing command')
-        self.task = asyncio.current_task()
         try:
             while not self.killed:
                 # execution context allows you to set up such things as temp fifos for stdout parsing or managing
@@ -140,45 +142,50 @@ class Command:
         except Exception as e:
             self.logger.error('encountered an error', exc_info=e)
         finally:
+            self.execution_event.set()
             self.logger.debug('run completed')
-            self.task = None
+            self.process = None
 
-    async def terminate(self, process: Optional[asyncio.subprocess.Process] = None) -> Optional[asyncio.Task]:
-        task = self.task
+    async def terminate(self, process: Optional[asyncio.subprocess.Process] = None) -> None:
+        execution_event = self.execution_event
         process = process or getattr(self, 'process', None)
-        if process:
+        if process and execution_event and not execution_event.is_set():
             self.terminated = True
             self.process_logger.info('terminating')
             try:
                 process.terminate()
-                if task is not None:
-                    await asyncio.wait_for(task, timeout=3)
+                if execution_event is not None:
+                    await asyncio.wait_for(execution_event.wait(), timeout=3)
             except asyncio.TimeoutError:
                 self.process_logger.warning('process did not end cleanly. killing.')
                 await self.kill(process)
                 self.process_logger.info('kill completed')
+            except asyncio.CancelledError:
+                self.process_logger.info('termination cancelled')
             except ProcessLookupError as e:
                 self.process_logger.warning(f'problem terminating: {e}')
         else:
             self.process_logger.debug('no process, cannot terminate.')
-        return task
 
-    async def kill(self, process: Optional[asyncio.subprocess.Process] = None) -> Optional[asyncio.Task]:
-        task = self.task
+    async def kill(self, process: Optional[asyncio.subprocess.Process] = None) -> None:
+        execution_event = self.execution_event
         process = process or getattr(self, 'process', None)
-        if process:
+        if process and execution_event and not execution_event.is_set():
             self.process_logger.warning('killing')
             self.killed = True
             try:
                 process.kill()
-                if task is not None:
-                    await asyncio.wait_for(task, timeout=3)
-                    self.process_logger.info('process kill returned')
+                if execution_event is not None:
+                    await asyncio.wait_for(execution_event.wait(), timeout=3)
+                self.process_logger.info('process kill returned')
+            except asyncio.TimeoutError:
+                self.process_logger.warning('process may be zombified. This cannot yet be handled.')
+            except asyncio.CancelledError:
+                self.process_logger.info('kill cancelled')
             except ProcessLookupError as e:
                 self.process_logger.warning(f'problem killing: {e}')
         else:
             self.process_logger.debug('no process, cannot kill.')
-        return task
 
     async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
         if stream:

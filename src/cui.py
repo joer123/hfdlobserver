@@ -409,7 +409,11 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
         return (f'{symbol}{infix: >9}{header.label: >6} {stratum} ', style)
 
     def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell]) -> list[CellText]:
-        if self.show_quiet or any(cell.value for cell in row_data):
+        if (
+            self.show_quiet
+            or self.source.row_headers[row_id].is_tagged('active')
+            or any(cell.value for cell in row_data)
+        ):
             return super().row(row_id, row_data)
         return []
 

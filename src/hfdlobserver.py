@@ -13,6 +13,7 @@ import logging
 import logging.handlers
 import pathlib
 import sys
+import threading
 
 # from signal import SIGINT, SIGTERM
 from typing import Any, Callable, Coroutine, Optional
@@ -187,7 +188,8 @@ def observe(
 
     try:
         with Runner() as runner:
-            util.RUNLOOP = runner.get_loop()  # FIXME, this needs a better solution.
+            util.thread_local.runner = runner
+            util.thread_local.loop = runner.get_loop()
 
             if as_controller:
                 message_broker = zero.ZeroBroker(**broker_config)
@@ -211,6 +213,8 @@ def observe(
     except Exception as exc:
         logger.error("Fatal error encountered", exc_info=exc)
     finally:
+        util.thread_local.runner = None
+        util.thread_local.loop = None
         logger.info('HFDLObserver exiting.')
 
 

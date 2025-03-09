@@ -34,7 +34,7 @@ class BaseDecoder:
     listener: hfdl_observer.data.ListenerConfig
     channel: hfdl_observer.data.ObservingChannel
     config: collections.abc.Mapping
-    task: Optional[asyncio.Task] = None
+    # task: Optional[asyncio.Task] = None
 
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         self.name = name

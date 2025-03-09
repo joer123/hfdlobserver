@@ -177,6 +177,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         self.relay('die', self.uuid)
 
     def listen(self, freqs: list[int]) -> None:
+        self.pings_sent += 1
         self.relay('listen', freqs)
 
     def ping(self, from_uuid: str) -> None:

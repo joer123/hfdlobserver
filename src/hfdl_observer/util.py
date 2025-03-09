@@ -13,10 +13,12 @@ import logging
 import math
 import os
 import re
+import threading
 
 from typing import Any, Callable, Coroutine, Union
 
 logger = logging.getLogger(__name__)
+thread_local = threading.local()
 
 
 def tobool(val: Union[bool, str, int]) -> bool:
@@ -150,19 +152,19 @@ class DeepChainMap(collections.ChainMap):
         return d
 
 
-RUNLOOP = None
-
-
-def schedule(coro: Coroutine) -> asyncio.Task:
-    return RUNLOOP.create_task(coro)
+def schedule(coro: Coroutine) -> asyncio.Task[Any]:
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+    return loop.create_task(coro)
 
 
 def call_soon(fn: Callable, *args: Any) -> asyncio.Handle:
-    return RUNLOOP.call_soon(fn, *args)
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+    return loop.call_soon(fn, *args)
 
 
 def call_later(delay: float, fn: Callable, *args: Any) -> asyncio.TimerHandle:
-    return RUNLOOP.call_later(delay, fn, *args)
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+    return loop.call_later(delay, fn, *args)
 
 
 async def cleanup_task(task: asyncio.Task) -> None:
