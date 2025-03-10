@@ -293,12 +293,10 @@ defaults = {
             "type": "DirectReceiver",
             "decoder": {
                 "type": "SoapySDRDecoder",
-                "settle_time": 10,
+                "settle_time": 9,
                 "sample-rates": [
-                    1300000,
-                    1536000,
-                    2048000,
-                    [2000000, 5300000],
+                    62500, 96000, 125000, 192000, 250000, 384000, 500000, 768000, 1000000,
+                    [2000000, 3000000],
                 ],
                 "dumphfdl": "default",
                 "soapysdr": {

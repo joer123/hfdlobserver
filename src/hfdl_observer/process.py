@@ -7,8 +7,10 @@
 import asyncio
 import asyncio.subprocess
 import contextlib
+import os
 import re
 import shlex
+import signal
 
 from copy import copy
 from typing import Any, Awaitable, Callable, Coroutine, Optional
@@ -43,7 +45,7 @@ class Command:
         fire_once: bool = True,
         on_prepare: Optional[Callable[[], Coroutine[Any, Any, None]]] = None,
         on_running: Optional[Callable[[asyncio.subprocess.Process, Any], None]] = None,
-        on_exited: Optional[Callable[[], None]] = None,
+        on_exited: Optional[Callable[[int | None], None]] = None,
         recoverable_errors: Optional[list[str]] = None,
         unrecoverable_errors: Optional[list[str]] = None,
         valid_return_codes: Optional[list[int]] = None,
@@ -84,6 +86,7 @@ class Command:
                 # execution context allows you to set up such things as temp fifos for stdout parsing or managing
                 # piping/resources between processes/awaitables. Basically anything that can't go into the on_prepare
                 # and on_execute callback hooks.
+                retcode: int | None = None
                 with self.execution_context_manager() as execution_context:
                     if self.on_prepare:
                         await self.on_prepare()
@@ -125,13 +128,14 @@ class Command:
                             self.process_logger.error(f'exited with {retcode}')
                         else:
                             self.process_logger.info(f'exited with {retcode}')
+
                     except Exception as e:
                         self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
                         raise
                     finally:
-                        if self.on_exited:
+                        if self.on_exited is not None:
                             self.process_logger.debug('exited')
-                            self.on_exited()
+                            self.on_exited(retcode)
                         async with self.exited_condition:
                             self.exited_condition.notify_all()
                         await util.cleanup_task(watcher_task)
@@ -180,6 +184,11 @@ class Command:
                 self.process_logger.info('process kill returned')
             except asyncio.TimeoutError:
                 self.process_logger.warning('process may be zombified. This cannot yet be handled.')
+                if process is not None:
+                    try:
+                        os.kill(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
             except asyncio.CancelledError:
                 self.process_logger.info('kill cancelled')
             except ProcessLookupError as e:
@@ -228,6 +237,7 @@ class Command:
 class ProcessHarness:
     logger: logging.Logger
     settle_time: float = 0
+    backoff_time: float = 0
     command: Optional[Command] = None
 
     def __init__(self) -> None:
@@ -240,6 +250,10 @@ class ProcessHarness:
         if self.settle_time:
             self.logger.info(f'settling for {self.settle_time} seconds')
             await asyncio.sleep(self.settle_time)
+        if self.backoff_time:
+            self.logger.info(f'additional (one-time) backoff {self.backoff_time} seconds')
+            await asyncio.sleep(self.backoff_time)
+            self.backoff_time = 0
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
         pass

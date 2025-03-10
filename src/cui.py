@@ -18,6 +18,7 @@ import rich.layout
 import rich.live
 import rich.logging
 import rich.markdown
+import rich.segment
 import rich.style
 import rich.table
 import rich.text
@@ -152,16 +153,18 @@ class ObserverDisplay:
         # WARNING: do not use any logger from within this method.
         if self.tty:
             self.garbage.append(self.tty)
-        table = rich.table.Table.grid(expand=True)
+
         available_space = (
             self.current_height
             - (self.counts.row_count if self.counts else 0)
             - (self.status.row_count if self.status else 0)
             - (self.tty_bar.row_count if self.tty_bar else 0)
             - (self.totals.row_count if self.totals else 0)
-            - 1  # trailing blank
+            # - 1  # trailing blank
         )
+
         if available_space > 0:
+            table = rich.table.Table.grid(expand=True)
             entries = list(ring)[-available_space:]
             for row in entries:
                 table.add_row(row)
@@ -243,9 +246,9 @@ class CumulativeLine:
     bonus_observed: Optional[int] = None
     active: Optional[int] = None
 
-    def register(self, observer: hfdlobserver.HFDLObserverController, cumulative: network.CumulativePacketStats) -> None:
-        self.cumulative = cumulative
-        cumulative.subscribe('update', self.on_update)
+    def register(self, observer: hfdlobserver.HFDLObserverController, totals: network.CumulativePacketStats) -> None:
+        self.cumulative = totals
+        totals.subscribe('update', self.on_update)
         observer.subscribe('active', self.on_active)
         observer.subscribe('observing', self.on_observing)
 
@@ -673,11 +676,12 @@ class ConsoleRedirector(rich.console.Console):
     output: Optional[Callable[[collections.deque], None]] = None
 
     def print(self, something: Any) -> None:  # type: ignore   # shut up, mypy.
-        self.ring.append(something)
-        if self.output is not None:
-            self.output(self.ring)
-        else:
+        if self.output is None:
             super().print(something)
+        else:
+            lines = self.render_lines(something)
+            self.ring.extend(rich.segment.Segments(line) for line in lines)
+            self.output(self.ring)
 
     def ensure_size(self, size: int) -> None:
         if self.ring.maxlen and size > self.ring.maxlen:

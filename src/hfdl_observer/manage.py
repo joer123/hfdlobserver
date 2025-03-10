@@ -287,12 +287,13 @@ class UniformOrchestrator(AbstractOrchestrator):
         return chosen_channels
 
     def proxy_sort_key(self, proxy: ReceiverProxy) -> tuple[int, int]:
-        return (proxy.weight, -max(proxy.observable_widths()))
+        return (proxy.weight, max(proxy.observable_widths()))
 
     def assign_channels(self, channels: list[data.ObservingChannel]) -> None:
         keeps = {}
         starts: list[data.ObservingChannel] = []
         ordered_proxies = sorted(self.proxies, key=self.proxy_sort_key, reverse=True)
+        logger.info(f'Receivers: {list(p.name for p in ordered_proxies)}')
         available = ordered_proxies.copy()
         for channel in channels:
             for receiver in ordered_proxies:
@@ -359,10 +360,10 @@ class DiverseOrchestrator(UniformOrchestrator):
         active_frequencies = [f for f in possible_frequencies if network.STATIONS.is_active(f)]
 
         actual_channels: list[data.ObservingChannel] = []
-        for proxy in self.proxies:
+        for proxy in sorted(self.proxies, key=self.proxy_sort_key, reverse=True):
             actual_channels.append(data.ObservingChannel(max(proxy.observable_widths()), []))
 
-        actual_channels.sort(key=lambda e: e.allowed_width_hz, reverse=True)
+        # actual_channels.sort(key=lambda e: e.allowed_width_hz, reverse=True)
 
         # merge the atomic channels into the possible proxy channels.
         for channel in channels:
@@ -523,7 +524,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
 
     def heartbeat(self) -> None:
         horizon = util.now() - datetime.timedelta(seconds=100)
-        for name, proxy in self.proxies.items():
+        for name, proxy in list(self.proxies.items()):
             if proxy.last_seen < horizon:
                 if proxy.pings_sent > 3:
                     logger.warning(f'proxy {name}:{proxy} may be dead. Removing.')

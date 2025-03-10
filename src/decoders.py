@@ -199,8 +199,13 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
             self.execution_arguments(),
             on_prepare=self.on_prepare,
             on_running=self.on_execute,
+            on_exited=self.on_exited,
             valid_return_codes=self.valid_return_codes(),
-            unrecoverable_errors=['Sample buffer overrun'],
+            unrecoverable_errors=[
+                'Sample buffer overrun',
+                'LIBUSB_ERROR_BUSY',
+                'Unable to initialize input',
+            ],
         )
         return command
 
@@ -211,6 +216,9 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
         return {}
 
     def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
+        pass
+
+    def on_exited(self, retcode: int | None) -> None:
         pass
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
@@ -311,3 +319,10 @@ class RX888mk2Decoder(SoapySDRDecoder):
         cmd = super().commandline()
         logger.info(f'COMMAND: {cmd}')
         return cmd
+
+    def on_exited(self, retcode: int | None) -> None:
+        if retcode == -11:
+            # USB error? back off.
+            self.backoff_time = 10
+        else:
+            super().on_exited(retcode)
