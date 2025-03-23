@@ -211,12 +211,13 @@ class Command:
             try:
                 pid = process.pid
                 try:
+                    logger.debug(f'signal {sig} to pid {pid}')
                     # department of redundancy department
                     process.send_signal(sig)
                     os.kill(pid, sig)
                 except ProcessLookupError:
                     pass
-                awaitables = [asyncio.to_thread(process.wait, timeout)]
+                awaitables = [util.in_thread(process.wait, timeout)]
                 if execution_event is not None:
                     awaitables.append(asyncio.wait_for(execution_event.wait(), timeout=timeout))
                 for result in await asyncio.gather(*awaitables, return_exceptions=True):
@@ -226,6 +227,8 @@ class Command:
                 self.process_logger.debug(f'signal {sig} cancelled')
             except Exception as err:
                 self.process_logger.info(f'signal {sig} interrupted', exc_info=err)
+        else:
+            logger.debug(f'signal {sig} is a no op... {process}, {execution_event}')
 
     async def kill(self) -> None:
         await self.signal(signal.SIGKILL)
@@ -314,7 +317,6 @@ class ProcessHarness:
     def __init__(self) -> None:
         self.logger = logging.getLogger(str(self))
         self.previous_pids = []
-        self.starting_event = asyncio.Event()
 
     def create_command(self) -> Command:
         raise NotImplementedError()
@@ -347,39 +349,48 @@ class ProcessHarness:
         return self.command is not None and self.command.check_alive() and self.command.is_running()
 
     def cleanup(self) -> None:
+        logger.debug(f'cleanup {self.command}')
         self.command = None
-        self.starting_event.clear()
 
     async def run(self) -> AsyncGenerator:
         if self.command:
             logger.info(f'{self} stopping existing command')
             await self.command.stop()
         try:
+            pid = None
             command: Command = self.create_command()
         except ValueError:
             logger.info('no command to execute.')
         else:
             self.command = command
+            logger.debug(f'{self} command set to {command}')
             await asyncio.sleep(0)
             try:
                 async with util.aclosing(command.execute()) as executor:
                     async for current_state in executor:
+                        self.logger.debug(f'reached {current_state.event}')
                         match current_state.event:
                             case 'preparing':
                                 await self.on_prepare()
                             case 'running':
+                                pid = current_state.process.pid
                                 self.on_running(current_state.process, current_state.extra)
                         yield current_state
+                    await asyncio.sleep(0)
+                    logger.debug(f'{self} lifecycle exited')
             except RuntimeError as err:
                 if 'coroutine ignored GeneratorExit' not in str(err):
                     raise
                 self.logger.info(str(err))
         finally:
+            self.logger.debug(f'{command} lifecycle ended ({pid})')
             self.cleanup()
 
     async def stop(self) -> None:
         if self.command:
             await self.command.stop()
+        else:
+            logger.debug(f'{self} has no command, stop ignored.')
         return None
 
     async def kill(self) -> None:

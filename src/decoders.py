@@ -326,3 +326,5 @@ class RX888mk2Decoder(SoapySDRDecoder):
                         if state.extra == -11:
                             self.backoff_time = 10
                 yield state
+            await asyncio.sleep(0)
+

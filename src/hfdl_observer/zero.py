@@ -106,7 +106,10 @@ class ZeroSubscriber:
 
         try:
             while self.running:
-                parts = await self.socket.recv_multipart()
+                try:
+                    parts = await asyncio.wait_for(self.socket.recv_multipart(), 15)
+                except asyncio.TimeoutError:
+                    break
                 header, body = parts
                 payload = json.loads(body.decode())
                 target, subject = header.decode().split('|', 1)

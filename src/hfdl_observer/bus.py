@@ -181,7 +181,7 @@ class RemoteURLRefresher(PeriodicTask, LocalPublisher):
     async def execute(self) -> None:
         data = {}
         try:
-            response = await asyncio.to_thread(requests.get, self.url)
+            response = await util.in_thread(requests.get, self.url)
         except requests.exceptions.ReadTimeout as e:
             logger.warning(f'suppressing timeout on {self.url}.', exc_info=e)
             return

@@ -13,6 +13,7 @@ import itertools
 import json
 import logging
 import uuid
+import weakref
 
 from typing import Any, Awaitable, Callable, Coroutine, Optional
 

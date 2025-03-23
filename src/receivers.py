@@ -242,10 +242,14 @@ class Web888Receiver(LocalReceiver):
 
 
 class DummyReceiver(Web888Receiver):
+    client: iqsources.DummyClient | None = None
+    decoder: decoders.DummyDecoder | None = None
 
     def setup_harnesses(self) -> None:
-        self.client = iqsources.DummyClient(self.name, self.config.get('client', {}))
-        self.decoder = decoders.DummyDecoder(self.name, self.config.get('decoder', {}), self.listener)
+        if not self.client:
+            self.client = iqsources.DummyClient(self.name, self.config.get('client', {}))
+        if not self.decoder:
+            self.decoder = decoders.DummyDecoder(self.name, self.config.get('decoder', {}), self.listener)
 
     async def run(self) -> AsyncGenerator:
         self.publish_listening()
@@ -258,8 +262,10 @@ class Web888ExecReceiver(Web888Receiver):
     decoder: decoders.IQDecoderProcess | None = None
 
     def setup_harnesses(self) -> None:
-        self.client = iqsources.KiwiClientProcess(self.name, self.config.get('client', {}))
-        self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
+        if not self.client:
+            self.client = iqsources.KiwiClientProcess(self.name, self.config.get('client', {}))
+        if not self.decoder:
+            self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
 
     def is_running(self) -> bool:
         return (
@@ -330,13 +336,10 @@ class Web888ExecReceiver(Web888Receiver):
         self.logger.debug('Stopping')
         client = self.client
         decoder = self.decoder
-        # frequencies = self.frequencies
         if decoder is not None:
             await decoder.stop()
         if client is not None:
             await client.stop()
-        # if frequencies == self.frequencies:
-        #     self.clear()
 
     def clear(self) -> None:
         if (
@@ -356,25 +359,6 @@ class Web888ExecReceiver(Web888Receiver):
         return out
 
 
-class Web888PipeReceiver(Web888Receiver):
-    client: iqsources.KiwiClient
-    decoder: decoders.IQDecoder
-
-    def setup_harnesses(self) -> None:
-        self.client = iqsources.KiwiClient(self.name, self.config.get('client', {}))
-        self.decoder = decoders.IQDecoder(self.name, self.config.get('decoder', {}), self.listener)
-        self.receiver_pipe = ReceiverPipe(self.client.commandline() + ['|'] + self.decoder.commandline())
-
-    async def run(self) -> AsyncGenerator:
-        async with util.aclosing(self.receiver_pipe.run()) as lifecycle:
-            async for current_state in lifecycle:
-                yield current_state
-
-    async def stop(self) -> None:
-        self.logger.debug('Stopping')
-        await self.receiver_pipe.stop()
-
-
 class ReceiverPipe(process.ProcessHarness):
     cmd: list[str]
 
@@ -387,18 +371,45 @@ class ReceiverPipe(process.ProcessHarness):
         return self.cmd
 
 
+class Web888PipeReceiver(Web888Receiver):
+    client: iqsources.KiwiClient | None = None
+    decoder: decoders.IQDecoder | None = None
+    receiver_pipe: None | ReceiverPipe = None
+
+    def setup_harnesses(self) -> None:
+        if not self.client:
+            self.client = iqsources.KiwiClient(self.name, self.config.get('client', {}))
+        if not self.decoder:
+            self.decoder = decoders.IQDecoder(self.name, self.config.get('decoder', {}), self.listener)
+        if not self.receiver_pipe:
+            self.receiver_pipe = ReceiverPipe(self.client.commandline() + ['|'] + self.decoder.commandline())
+
+    async def run(self) -> AsyncGenerator:
+        if self.receiver_pipe is not None:
+            async with util.aclosing(self.receiver_pipe.run()) as lifecycle:
+                async for current_state in lifecycle:
+                    yield current_state
+                await asyncio.sleep(0)
+
+    async def stop(self) -> None:
+        self.logger.debug('Stopping')
+        if self.receiver_pipe is not None:
+            await self.receiver_pipe.stop()
+
+
 class DirectReceiver(LocalReceiver):
     observable_channel_widths: list[int]
     decoder: decoders.DirectDecoder | None = None
 
     def setup_harnesses(self) -> None:
-        decoder_type = self.config['decoder']['type']
-        decoder_class = getattr(decoders, decoder_type)
-        self.decoder = decoder_class(self.name, self.config.get('decoder', {}), self.listener)
-        if not isinstance(self.decoder, decoders.DirectDecoder):
-            raise ValueError(f'{self.decoder} is not an expected Decoder')
-        self.observable_channel_widths = self.decoder.observable_channel_widths()
-        logger.info(f'observable channel widths {self.observable_channel_widths}')
+        if not self.decoder:
+            decoder_type = self.config['decoder']['type']
+            decoder_class = getattr(decoders, decoder_type)
+            self.decoder = decoder_class(self.name, self.config.get('decoder', {}), self.listener)
+            if not isinstance(self.decoder, decoders.DirectDecoder):
+                raise ValueError(f'{self.decoder} is not an expected Decoder')
+            self.observable_channel_widths = self.decoder.observable_channel_widths()
+            logger.info(f'observable channel widths {self.observable_channel_widths}')
 
     def is_running(self) -> bool:
         return self.decoder is not None and self.decoder.is_running()
@@ -412,9 +423,10 @@ class DirectReceiver(LocalReceiver):
         try:
             async with util.aclosing(self.decoder.listen(self.channel)) as lifecycle:
                 async for state in lifecycle:
+                    logger.info(f'{self} reached state {state.event}')
                     yield state
         except asyncio.CancelledError:
-            pass
+            logger.info(f'{self} cancelled')
         except Exception as err:
             logger.error(f'{self} encountered an error', exc_info=err)
 
@@ -422,7 +434,6 @@ class DirectReceiver(LocalReceiver):
         self.logger.debug('Stopping')
         if self.decoder is not None:
             await self.decoder.stop()
-        # self.clear()
 
     def observable_widths(self) -> list[int]:
         return self.observable_channel_widths
