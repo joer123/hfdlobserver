@@ -10,7 +10,7 @@ import os
 import pathlib
 import yaml
 
-from typing import MutableMapping, Union
+from typing import Any, MutableMapping, Union
 
 import hfdl_observer.env as env
 import hfdl_observer.util as util
@@ -115,14 +115,17 @@ def load(filepath: Union[str, pathlib.Path]) -> MutableMapping:
         parent = registry.get(parent_key, {})
         if 'local_receivers' in parent:
             parent['local_receivers'] = dereference_receivers(parent['local_receivers'], registry, defaults)
-
+        else:
+            parent['local_receivers'] = dereference_receivers(
+                defaults[parent_key]['local_receivers'], registry, defaults
+            )
     _globals = globals()
     for key in ['observer', 'cui', 'node', 'viewer', 'aggregator']:
         _globals[key] = chained(key, registry, defaults)
     return registry
 
 
-defaults = {
+defaults: dict[str, Any] = {
     "observer": {
         "conductor": {
             "type": "DiverseConductor",
