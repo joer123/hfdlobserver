@@ -116,12 +116,11 @@ class HFDLPacketInfo:
         else:
             subtype = 'unknown'
         station = self.station or ""
-        if station:
-            gs = self.ground_station.get('name', None)
-            if gs is None:
-                # gs_id = self.ground_station.get('id', -1)
-                gs = self.ground_station.get('name', 'n/a')
-            gs = gs.split(',', 1)[0]
-        else:
-            gs = 'unknown'
+        gs = self.ground_station.get('name', None)
+        if gs is None:
+            gs = self.ground_station.get('name')
+            if not gs:
+                gs_id = self.ground_station.get('id')
+                gs = f'#{gs_id}' if gs_id else 'unknown'
+        gs = gs.split(',', 1)[0]
         return f'<HFDL/{subtype} {station}@{self.timestamp} {self.frequency}kHz ({self.snr:.1f}dB) {direction} {gs}>'
