@@ -545,7 +545,7 @@ class HeatMap:
             raise ValueError(f'display mode not supported: {mode}')
         self.data_source = callable_mode
         self.bin_size = min(3600, max(60, int(config.get('bin_size', 60))))
-        self.refresh_period = min(self.refresh_period, self.bin_size)
+        self.refresh_period = max(1, min(self.refresh_period, self.bin_size))
         self.targetted_frequencies = []
         self.untargetted_frequencies = []
 
@@ -705,7 +705,7 @@ class RichLive(rich.live.Live):
             try:
                 super().refresh()
             except AssertionError as err:
-                logger.warning(f'ignoring {err}')
+                logger.debug(f'ignoring {err}')
             for callback in self.post_refresh or []:
                 callback()
 
