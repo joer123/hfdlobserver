@@ -7,13 +7,17 @@
 import asyncio
 import asyncio.subprocess
 import contextlib
+import dataclasses
+import errno
 import os
 import re
 import shlex
 import signal
+# for thread based execution.
+import subprocess
 
 from copy import copy
-from typing import Any, Awaitable, Callable, Coroutine, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import logging
 
@@ -23,183 +27,232 @@ import hfdl_observer.util as util
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class CommandState:
+    event: str
+    extra: Optional[Any] = None
+    # process: Optional[asyncio.subprocess.Process] = None
+    process: Optional[subprocess.Popen] = None
+
+
 class Command:
-    process: Optional[asyncio.subprocess.Process] = None
+    # process: Optional[asyncio.subprocess.Process] = None
+    process: Optional[subprocess.Popen] = None
     execution_event: Optional[asyncio.Event] = None
-    killed: bool = False
-    terminated: bool = False
-    executor: Optional[Awaitable] = None
     unrecoverable_errors: list[str]
     recoverable_errors: list[str]
     recoverable_error_count: int = 0
     recoverable_error_limit: int = 10
     fire_once: bool = True
+    current_state: CommandState | None = None
+    watcher_task: None | asyncio.Task = None
 
     def __init__(
         self,
         parent_logger: logging.Logger,
         cmd: list[str],
         execution_arguments: dict = {},
-        execution_context_manager: Optional[Callable] = None,
         shell: bool = False,
         fire_once: bool = True,
-        on_prepare: Optional[Callable[[], Coroutine[Any, Any, None]]] = None,
-        on_running: Optional[Callable[[asyncio.subprocess.Process, Any], None]] = None,
-        on_exited: Optional[Callable[[int | None], None]] = None,
         recoverable_errors: Optional[list[str]] = None,
         unrecoverable_errors: Optional[list[str]] = None,
         valid_return_codes: Optional[list[int]] = None,
     ) -> None:
+        if not cmd:
+            raise ValueError('no command arguments specified')
         self.cmd = cmd
         self.execution_arguments = copy(execution_arguments)
-        self.prepared_condition = asyncio.Condition()
-        self.running_condition = asyncio.Condition()
-        self.exited_condition = asyncio.Condition()
+        self.prepare_event = asyncio.Event()
         self.logger = parent_logger
         self.shell = shell
         self.fire_once = fire_once
-        if execution_context_manager:
-            self.execution_context_manager = execution_context_manager
-        else:
-            self.execution_context_manager = self.noop_execution_context_manager
-        self.on_prepare = on_prepare
-        self.on_running = on_running
-        self.on_exited = on_exited
         self.unrecoverable_errors = unrecoverable_errors or []
         self.recoverable_errors = recoverable_errors or []
         self.valid_return_codes = valid_return_codes or [0]
-        self.process_logger = logger
+        self.process_logger = self.logger
 
-    @contextlib.contextmanager
-    def noop_execution_context_manager(self) -> Any:
-        # no op.
-        yield None
+    class StdErrWatcher:
+        recoverable_error_count = 0
+        recoverable_error_limit = 0
 
-    async def execute(self) -> None:
-        if self.execution_event:
-            self.logger.warning('Command has been executed, joining its execution')
-            await self.execution_event.wait()
-        self.execution_event = asyncio.Event()
+    def check_alive(self) -> bool:
+        if self.process:
+            pid = self.process.pid
+            try:
+                # If running, this will do nothing on POSIX. If not running, will raise exception:
+                # doing it through the process object could give false results.
+                # On Windows it hypotheticallyl could generate a CTRL_BREAK, but there are so many other POSIX
+                # assumptions in this already, it's unlikely you'd get this far running on Windows.
+                os.kill(pid, 0)
+            except OSError as err:
+                if err.errno == errno.EPERM:
+                    # There is a process, but we don't have permission to send signals to it.
+                    return True
+                elif err.errno != errno.ESRCH:
+                    raise
+            else:
+                return True
+        # otherwise, it *might* be in the preparing state. If it's not then it's not really alive.
+        elif self.current_state and self.current_state.event == 'preparing':
+            return True
+        # Command is dead. Make it so.
+        self.logger.info(f'{self} appears dead. Stopping')
+        util.schedule(self.stop())
+        return False
+
+    def is_running(self) -> bool:
+        return (
+            self.current_state is not None
+            and self.current_state.event not in ['error', 'done']
+        )
+
+    async def lifecycle(self) -> AsyncGenerator:
         self.logger.debug('executing command')
+        retcode: int | None = None
         try:
-            while not self.killed:
-                # execution context allows you to set up such things as temp fifos for stdout parsing or managing
-                # piping/resources between processes/awaitables. Basically anything that can't go into the on_prepare
-                # and on_execute callback hooks.
-                retcode: int | None = None
-                with self.execution_context_manager() as execution_context:
-                    if self.on_prepare:
-                        await self.on_prepare()
-                    async with self.prepared_condition:
-                        self.prepared_condition.notify_all()
+            # remember asend and athrow!
+            cmd = self.cmd
+            yield CommandState('preparing')
+            self.logger.debug('gathering options')
+            exec_args: dict[str, Any] = {
+                'stderr': asyncio.subprocess.PIPE
+            }
+            exec_args.update(self.execution_arguments)
+            shell_cmd = shlex.join(cmd)
+            self.logger.debug(f'$ `{shell_cmd}`')
 
-                    self.logger.debug('gathering options')
-                    exec_args = {
-                        'stderr': asyncio.subprocess.PIPE
-                    }
-                    exec_args.update(self.execution_arguments)
-                    self.logger.info(f'starting {self}')
-                    self.logger.debug(f'$ `{shlex.join(self.cmd)}`')
-                    self.logger.debug(f'  {exec_args}')
-                    self.recoverable_error_count = 0
+            for tries in range(3):
+                try:
+                    # Cannot use asyncio.subprocess. In testing, some odd behaviour resulted in these calls getting
+                    # blocked on os.waitpid, which halts the entire event loop. The reasons for this aren't exactly
+                    # clear, but there may be a subtle error with pipe handling that causes (eg) kiwirecorder stdout
+                    # to be sent to stderr, which fills up the internal buffer and triggers the waitpid call. Since the
+                    # (kiwirecorder) process is working fine, it doesn't end in any reasonable time, and thus os.waitpid
+                    # blocks the event loop.
+                    #
+                    # Instead, we perform the process related in a different thread (using a thread/loop local executor
+                    # and a custom thread pool) both the process creation call (Popen) and the resulting main wait()
+                    # need to be performed in the executor.
+                    #
+                    # previous (in-loop) it looked like this:
+                    # if self.shell:
+                    #     spawner = asyncio.subprocess.create_subprocess_shell(shell_cmd, **exec_args)
+                    # else:
+                    #     spawner = asyncio.subprocess.create_subprocess_exec(*cmd, **exec_args)
+
+                    # or we can just wrap Popen() and process.wait() in asyncio.to_thread calls...
                     if self.shell:
-                        shell_cmd = shlex.join(self.cmd)
-                        process = (
-                            await asyncio.subprocess.create_subprocess_shell(shell_cmd, **exec_args)  # type: ignore
-                        )
-                    else:
-                        process = (
-                            await asyncio.subprocess.create_subprocess_exec(*self.cmd, **exec_args)  # type: ignore
-                        )
-                    self.process = process
-                    self.process_logger = self.logger.getChild(f'pid#{process.pid}')
-                    self.process_logger.debug('process started')
+                        exec_args['shell'] = True
+                    spawner = util.in_thread(subprocess.Popen, cmd, **exec_args)
+                    process = await asyncio.wait_for(spawner, 5)
 
-                    if self.on_running:
-                        self.on_running(process, execution_context)
-                    async with self.running_condition:
-                        self.running_condition.notify_all()
-
-                    try:
-                        self.process_logger.debug('starting error watcher')
-                        watcher_task = util.schedule(self.watch_stderr(process.pid, process.stderr))
-                        retcode = await process.wait()
-                        if retcode not in self.valid_return_codes and not (self.terminated or self.killed):
-                            self.process_logger.error(f'exited with {retcode}')
-                        else:
-                            self.process_logger.info(f'exited with {retcode}')
-
-                    except Exception as e:
-                        self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
+                    break
+                except OSError as ose:
+                    if not util.is_bad_file_descriptor(ose):
                         raise
-                    finally:
-                        if self.on_exited is not None:
-                            self.process_logger.debug('exited')
-                            self.on_exited(retcode)
-                        async with self.exited_condition:
-                            self.exited_condition.notify_all()
-                        await util.cleanup_task(watcher_task)
-                    if self.fire_once:
-                        break
+                    self.logger.info(f'retrying {tries} (descriptor)')
+                except asyncio.TimeoutError:
+                    self.logger.info(f'retrying {tries} (timeout)')
+            else:
+                raise ValueError('Could not start process after 3 tries')
+            self.process = process
+            self.process_logger = self.logger.getChild(f'pid#{process.pid}')
+            self.process_logger.debug('process started')
+            yield CommandState('running', process.pid, process=process)
 
-                self.logger.debug('execution context freed')
-        except Exception as e:
-            self.logger.error('encountered an error', exc_info=e)
+            try:
+                stderr_reader = await util.async_reader(process.stderr)
+                async with self.watch_stderr(process.pid, stderr_reader):
+                    retcode = await util.in_thread(process.wait)
+                if retcode not in self.valid_return_codes:
+                    self.process_logger.info(f'exited with {retcode}')
+                else:
+                    self.process_logger.debug(f'exited with {retcode}')
+            except asyncio.CancelledError:
+                self.process_logger.info("mapping cancellation to exit")
+                pass
+            except Exception as e:
+                self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
+                raise
+        except Exception as exc:
+            yield CommandState('error', exc, process=self.process)
         finally:
-            self.execution_event.set()
-            self.logger.debug('run completed')
+            yield CommandState('done', retcode, process=self.process)
             self.process = None
 
-    async def terminate(self, process: Optional[asyncio.subprocess.Process] = None) -> None:
-        execution_event = self.execution_event
-        process = process or getattr(self, 'process', None)
-        if process and execution_event and not execution_event.is_set():
-            self.terminated = True
-            self.process_logger.info('terminating')
-            try:
-                process.terminate()
-                if execution_event is not None:
-                    await asyncio.wait_for(execution_event.wait(), timeout=3)
-            except asyncio.TimeoutError:
-                self.process_logger.warning('process did not end cleanly. killing.')
-                await self.kill(process)
-                self.process_logger.info('kill completed')
-            except asyncio.CancelledError:
-                self.process_logger.info('termination cancelled')
-            except ProcessLookupError as e:
-                self.process_logger.warning(f'problem terminating: {e}')
-        else:
-            self.process_logger.debug('no process, cannot terminate.')
+    async def execute(self) -> AsyncGenerator:
+        if self.execution_event:
+            self.logger.info('Command has been executed, joining its execution')
+            await self.execution_event.wait()
+            return
+        self.current_state = CommandState('starting')
+        self.execution_event = execution_event = asyncio.Event()
+        try:
+            async with util.aclosing(self.lifecycle()) as lifecycle:
+                async for command_state in lifecycle:
+                    self.current_state = command_state
+                    match command_state.event:
+                        case 'error':
+                            # we might want to ignore errors.
+                            self.process_logger.info('encountered error', exc_info=command_state.extra)
+                            if isinstance(command_state.extra, KeyboardInterrupt):
+                                raise command_state.extra
+                            else:
+                                self.process_logger.debug('continuing')
+                    yield self.current_state
+        finally:
+            execution_event.set()
 
-    async def kill(self, process: Optional[asyncio.subprocess.Process] = None) -> None:
+    # async def signal(self, sig: int, process: Optional[asyncio.subprocess.Process] = None, timeout: int = 5) -> None:
+    async def signal(self, sig: int, process: Optional[subprocess.Popen] = None, timeout: int = 5) -> None:
         execution_event = self.execution_event
-        process = process or getattr(self, 'process', None)
+        process = process or self.process
         if process and execution_event and not execution_event.is_set():
-            self.process_logger.warning('killing')
-            self.killed = True
             try:
-                process.kill()
+                pid = process.pid
+                try:
+                    # department of redundancy department
+                    process.send_signal(sig)
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+                awaitables = [asyncio.to_thread(process.wait, timeout)]
                 if execution_event is not None:
-                    await asyncio.wait_for(execution_event.wait(), timeout=3)
-                self.process_logger.info('process kill returned')
-            except asyncio.TimeoutError:
-                self.process_logger.warning('process may be zombified. This cannot yet be handled.')
-                if process is not None:
-                    try:
-                        os.kill(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    awaitables.append(asyncio.wait_for(execution_event.wait(), timeout=timeout))
+                for result in await asyncio.gather(*awaitables, return_exceptions=True):
+                    if isinstance(result, asyncio.TimeoutError):
+                        self.process_logger.debug(f'signal {sig} may have been ignored.')
             except asyncio.CancelledError:
-                self.process_logger.info('kill cancelled')
-            except ProcessLookupError as e:
-                self.process_logger.warning(f'problem killing: {e}')
-        else:
-            self.process_logger.debug('no process, cannot kill.')
+                self.process_logger.debug(f'signal {sig} cancelled')
+            except Exception as err:
+                self.process_logger.info(f'signal {sig} interrupted', exc_info=err)
 
-    async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
+    async def kill(self) -> None:
+        await self.signal(signal.SIGKILL)
+
+    async def terminate(self) -> None:
+        await self.signal(signal.SIGTERM)
+        await self.kill()
+
+    async def stop(self) -> None:
+        await self.signal(signal.SIGINT)
+        await self.terminate()
+
+    @contextlib.asynccontextmanager
+    async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> AsyncIterator[None]:
+        self.process_logger.debug('starting error watcher')
+        self.watcher_task = util.schedule(self._watch_stderr(pid, stream))
+        try:
+            yield None
+        finally:
+            await util.cleanup_task(self.watcher_task)
+
+    async def _watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
+        stream_logger = None
         if stream:
             stream_logger = self.process_logger
             try:
+                # does not (cannot) use util.aclosing()
                 async for data in stream:
                     try:
                         line = data.decode('utf8').rstrip()
@@ -209,23 +262,23 @@ class Command:
                     if any(re.search(pattern, line) for pattern in self.unrecoverable_errors):
                         stream_logger.warning(f'encountered unrecoverable error: "{line}".')
                         # terminate, subclasses can restart process if desired.
-                        await self.terminate()
+                        await self.stop()
                         break
                     if any(re.search(pattern, line) for pattern in self.recoverable_errors):
                         self.recoverable_error_count += 1
                         stream_logger.debug(f'recoverable error detected. Current count {self.recoverable_error_count}')
                         if self.recoverable_error_count > self.recoverable_error_limit:
                             stream_logger.warning(f'received too many recoverable errors `{line}`.')
-                            await self.terminate()
+                            await self.stop()
                             break
-                    if not self.process:
+                    if not self.process or (self.execution_event and self.execution_event.is_set()):
                         break
                     await asyncio.sleep(0)
             except OSError as err:
                 if util.is_bad_file_descriptor(err):
                     # file was closed elsewhere. should mean the watched process exited as well.
-                    self.logger.info(f'ignoring {err} on error watcher')
-                    await self.terminate()
+                    self.logger.info(f'{err} on error watcher. ending process.')
+                    await self.stop()
                 else:
                     raise
         (stream_logger or self.logger).info(f'finished watching {stream}')
@@ -233,20 +286,51 @@ class Command:
     def reset_recoverable_error_count(self, *_: Any) -> None:
         self.recoverable_error_count = 0
 
+    def describe(self) -> str:
+        pid_str: str = ''
+        if self.process:
+            pid_str = f'[pid: {self.process.pid}]'
+        cmd_str = ''
+        if self.cmd:
+            cmd_str = str(self.cmd[0])
+        state = 'unknown'
+        if self.current_state:
+            state = self.current_state.event
+        return f'{state} {cmd_str} {pid_str}'
+
+    def __del__(self) -> None:
+        if self.watcher_task:
+            self.watcher_task.cancel()
+
 
 class ProcessHarness:
     logger: logging.Logger
     settle_time: float = 0
     backoff_time: float = 0
     command: Optional[Command] = None
+    previous_pids: list[int]
+    starting_event: asyncio.Event
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(str(self))
+        self.previous_pids = []
+        self.starting_event = asyncio.Event()
 
     def create_command(self) -> Command:
         raise NotImplementedError()
 
     async def on_prepare(self) -> None:
+        for pid in self.previous_pids[:]:
+            # clean up any previous pids. This should not be necessary, but it seems that some USB based radios can
+            # linger past exit.
+            try:
+                self.logger.info(f'will cleanup pid {pid}')
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                self.logger.info(f'pid {pid} cleared')
+                self.previous_pids.remove(pid)
+            except OSError as err:
+                self.logger.info(f'pid {pid} could not be cleared at this time. {err}')
         if self.settle_time:
             self.logger.info(f'settling for {self.settle_time} seconds')
             await asyncio.sleep(self.settle_time)
@@ -255,25 +339,47 @@ class ProcessHarness:
             await asyncio.sleep(self.backoff_time)
             self.backoff_time = 0
 
-    def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        pass
+    def on_running(self, process: asyncio.subprocess.Process, context: Any) -> None:
+        self.logger.info(f'with pid {process.pid}')
+        self.previous_pids.append(process.pid)
+
+    def is_running(self) -> bool:
+        return self.command is not None and self.command.check_alive() and self.command.is_running()
 
     def cleanup(self) -> None:
         self.command = None
+        self.starting_event.clear()
 
-    async def start(self) -> None:
+    async def run(self) -> AsyncGenerator:
         if self.command:
-            await self.command.kill()
-        command: Command = self.create_command()
-        self.command = command
+            logger.info(f'{self} stopping existing command')
+            await self.command.stop()
         try:
-            await command.execute()
+            command: Command = self.create_command()
+        except ValueError:
+            logger.info('no command to execute.')
+        else:
+            self.command = command
+            await asyncio.sleep(0)
+            try:
+                async with util.aclosing(command.execute()) as executor:
+                    async for current_state in executor:
+                        match current_state.event:
+                            case 'preparing':
+                                await self.on_prepare()
+                            case 'running':
+                                self.on_running(current_state.process, current_state.extra)
+                        yield current_state
+            except RuntimeError as err:
+                if 'coroutine ignored GeneratorExit' not in str(err):
+                    raise
+                self.logger.info(str(err))
         finally:
             self.cleanup()
 
     async def stop(self) -> None:
         if self.command:
-            await self.command.terminate()
+            await self.command.stop()
         return None
 
     async def kill(self) -> None:
@@ -283,3 +389,8 @@ class ProcessHarness:
 
     def reset_recoverable_error_count(self, *_: Any) -> None:
         self.recoverable_error_count = 0
+
+    def describe(self) -> str:
+        if self.command:
+            return self.command.describe()
+        return f"{self.__class__.__name__} not running"

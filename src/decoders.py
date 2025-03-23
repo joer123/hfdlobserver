@@ -11,18 +11,18 @@ import collections.abc
 import logging
 import random
 
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, AsyncGenerator, Callable, Mapping, Optional
 
 import hfdl_observer.data
 import hfdl_observer.env as env
-import hfdl_observer.process
+import hfdl_observer.process as process
 import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
 
 
-class DumphfdlCommand(hfdl_observer.process.Command):
+class DumphfdlCommand(process.Command):
     pass
 
 
@@ -46,14 +46,9 @@ class BaseDecoder:
     def station_id(self) -> Optional[str]:
         return self.config.get('station_id', None)
 
-    async def start(self) -> None:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
         raise NotImplementedError()
-
-    async def stop(self) -> None:
-        raise NotImplementedError()
-
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
-        raise NotImplementedError()
+        yield None  # mypy gets confused without this.
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}@{self.name}'
@@ -80,6 +75,14 @@ class Dumphfdl(BaseDecoder):
             value = self.config.get(from_opt, None)
             if value is not None:
                 cmd.extend([f'--{to_opt}', str(normalizer(value))])
+        # allow passing through the most useful flags.
+        flags = [
+            'freq-as-squawk', 'utc', 'milliseconds', 'raw-frames', 'output-mpdus', 'output-corrupted-pdus'
+        ]
+        for flag in flags:
+            value = self.config.get(flag, False)
+            if util.tobool(value):
+                cmd.append(f'--{flag}')
         try:
             cmd.extend([
                 '--statsd', str(self.config['statsd_server']).replace(' ', ':'),
@@ -127,7 +130,7 @@ class Dumphfdl(BaseDecoder):
         # 1 : ??? seems to be related to pipe or usb problems?
         # -6 : SIGABRT. "The futex facility returned an unexpected error code."
         # -11 is speculative. Some weirdness on odroid
-        return [0, 1, -6, -11, -15]
+        return [0, 1, -2, -6, -9, -11, -15]
 
 
 class IQDecoder(Dumphfdl):
@@ -141,12 +144,12 @@ class IQDecoder(Dumphfdl):
         ]
 
 
-class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
+class IQDecoderProcess(process.ProcessHarness, IQDecoder):
     pipe: util.Pipe
 
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         IQDecoder.__init__(self, name, config, listener)
-        hfdl_observer.process.ProcessHarness.__init__(self)
+        process.ProcessHarness.__init__(self)
         self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def commandline(self) -> list[str]:
@@ -157,39 +160,40 @@ class IQDecoderProcess(hfdl_observer.process.ProcessHarness, IQDecoder):
             'stdin': self.pipe.read,
         }
 
-    def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        self.pipe.close_read()
-
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
         self.channel = channel
-        await self.start()
+        if self.channel and self.channel.frequencies:
+            async with util.aclosing(self.run()) as lifecycle:
+                async for state in lifecycle:
+                    match state.event:
+                        case 'running':
+                            self.pipe.close_read()
+                    yield state
 
     def create_command(self) -> IQDecoderCommand:
         cmd = self.commandline()
-        # self.logger.info(f'CMD: {cmd}')
         command = IQDecoderCommand(
             self.logger,
             cmd,
             self.execution_arguments(),
-            on_prepare=self.on_prepare,
-            on_running=self.on_execute,
             valid_return_codes=self.valid_return_codes(),
         )
         return command
 
 
 class DummyDecoder(IQDecoderProcess):
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
         self.channel = channel
         logger.debug(f'{self} command {self.commandline()}')
         logger.debug(f'{self} listening on {channel}')
         await asyncio.sleep(0.1)
+        yield process.CommandState('done')
 
 
-class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
+class DirectDecoder(process.ProcessHarness, Dumphfdl):
     def __init__(self, name: str, config: dict, listener: hfdl_observer.data.ListenerConfig) -> None:
         Dumphfdl.__init__(self, name, config, listener)
-        hfdl_observer.process.ProcessHarness.__init__(self)
+        process.ProcessHarness.__init__(self)
         self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def create_command(self) -> DumphfdlCommand:
@@ -197,9 +201,6 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
             self.logger,
             self.commandline(),
             self.execution_arguments(),
-            on_prepare=self.on_prepare,
-            on_running=self.on_execute,
-            on_exited=self.on_exited,
             valid_return_codes=self.valid_return_codes(),
             unrecoverable_errors=[
                 'Sample buffer overrun',
@@ -215,15 +216,12 @@ class DirectDecoder(hfdl_observer.process.ProcessHarness, Dumphfdl):
     def execution_arguments(self) -> dict:
         return {}
 
-    def on_execute(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        pass
-
-    def on_exited(self, retcode: int | None) -> None:
-        pass
-
-    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> None:
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
         self.channel = channel
-        await self.start()
+        if self.channel and self.channel.frequencies:
+            async with util.aclosing(self.run()) as lifecycle:
+                async for state in lifecycle:
+                    yield state
 
     def observable_channel_widths(self) -> list[int]:
         raise NotImplementedError(str(self.__class__))
@@ -320,9 +318,11 @@ class RX888mk2Decoder(SoapySDRDecoder):
         logger.info(f'COMMAND: {cmd}')
         return cmd
 
-    def on_exited(self, retcode: int | None) -> None:
-        if retcode == -11:
-            # USB error? back off.
-            self.backoff_time = 10
-        else:
-            super().on_exited(retcode)
+    async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
+        async with util.aclosing(super().listen(channel)) as lifecycle:
+            async for state in lifecycle:
+                match state.event:
+                    case 'done':
+                        if state.extra == -11:
+                            self.backoff_time = 10
+                yield state

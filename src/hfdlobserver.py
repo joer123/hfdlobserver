@@ -13,10 +13,9 @@ import logging
 import logging.handlers
 import pathlib
 import sys
-import threading
 
 # from signal import SIGINT, SIGTERM
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import click
 
@@ -64,10 +63,16 @@ class HFDLObserverNode(receivers.ReceiverNode):
     def message_broker(self) -> bus.RemoteBroker:
         return bus.REMOTE_BROKER
 
+    async def shutdown(self) -> None:
+        awaitables = [receiver.stop() for receiver in self.local_receivers]
+        await asyncio.gather(*awaitables, return_exceptions=True)
+        self.local_receivers = []
+
 
 class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
     running: bool = True
     packet_watcher: orm.PacketWatcher
+    previous_description: list[str] | None = None
 
     def __init__(self, config: collections.abc.Mapping) -> None:
         manage.ConductorNode.__init__(self, config)
@@ -77,6 +82,7 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         self.network_overview = manage.NetworkOverview(config['tracker'], network.UPDATER)
         self.network_overview.subscribe('state', network.UPDATER.prune)
         self.network_overview.subscribe('frequencies', self.on_frequencies)
+        self.subscribe('orchestrated', self.maybe_describe_receivers)
 
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
         self.hfdl_consumers = [
@@ -110,19 +116,19 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         self.network_overview.start()
         self.hfdl_listener.start(self.hfdl_consumers)
 
-    def killables(self) -> list[Coroutine]:
-        outstanding = [
+    def outstanding_awaitables(self) -> list[Awaitable]:
+        outstanding: list[Awaitable] = [
             self.packet_watcher.stop_pruning(),
             self.network_overview.stop(),
         ]
-        outstanding.extend(receivers.ReceiverNode.killables(self))
-        outstanding.extend(manage.ConductorNode.killables(self))
+        outstanding.extend(receivers.ReceiverNode.outstanding_awaitables(self))
+        outstanding.extend(manage.ConductorNode.outstanding_awaitables(self))
         return outstanding
 
-    async def kill(self) -> None:
-        logger.warning(f'{self} killed')
+    async def stop(self) -> None:
+        logger.warning(f'{self} stopped')
         self.hfdl_listener.stop()
-        await asyncio.gather(*self.killables())
+        await asyncio.gather(*self.outstanding_awaitables(), return_exceptions=True)
         logger.info(f'{self} tasks halted')
 
     def message_broker(self) -> bus.RemoteBroker:
@@ -133,6 +139,18 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         for line in str(table).split('\n'):
             logger.info(f'{line}')
 
+    def maybe_describe_receivers(self, *_: Any) -> None:
+        current = list(r.describe() for r in self.local_receivers)
+        if self.previous_description != current:
+            for line in current:
+                logger.info(line)
+            self.previous_description = current
+
+    async def shutdown(self) -> None:
+        awaitables = [receiver.stop() for receiver in self.local_receivers]
+        await asyncio.gather(*awaitables, return_exceptions=True)
+        self.local_receivers = []
+
 
 async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> None:
     logger.info("Starting observer")
@@ -141,34 +159,25 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
         import tracemalloc
         tracemalloc.start()
         last_snapshot = tracemalloc.take_snapshot()
-    try:
-        observer.start()
-        while observer.running:
-            await asyncio.sleep(1)
-            if TRACEMALLOC:
-                await asyncio.sleep(59)
-                p = pathlib.Path('memory.trace')
-                with p.open("a", encoding='utf8') as f:
-                    f.write('====\n')
-                    f.write(f'{util.now()}\n')
-                    snapshot = tracemalloc.take_snapshot()
-                    try:
-                        diff = snapshot.compare_to(last_snapshot, 'lineno')
-                        for e in diff:
-                            f.write(f'{e.size} | {e.size_diff} | {" ".join(str(x) for x in e.traceback.format(1))}\n')
-                    except Exception as err:
-                        logger.error('error in tracemallocery', exc_info=err)
-                    else:
-                        logger.info('memory checkpoint')
-                    last_snapshot = snapshot
-    except asyncio.CancelledError:
-        logger.error('Observer loop cancelled')
-        try:
-            await observer.kill()
-        except asyncio.CancelledError:
-            logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
-        except RecursionError:
-            logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
+    observer.start()
+    while observer.running:
+        await asyncio.sleep(1)
+        if TRACEMALLOC:
+            await asyncio.sleep(59)
+            p = pathlib.Path('memory.trace')
+            with p.open("a", encoding='utf8') as f:
+                f.write('====\n')
+                f.write(f'{util.now()}\n')
+                snapshot = tracemalloc.take_snapshot()
+                try:
+                    diff = snapshot.compare_to(last_snapshot, 'lineno')
+                    for e in diff:
+                        f.write(f'{e.size} | {e.size_diff} | {" ".join(str(x) for x in e.traceback.format(1))}\n')
+                except Exception as err:
+                    logger.error('error in tracemallocery', exc_info=err)
+                else:
+                    logger.info('memory checkpoint')
+                last_snapshot = snapshot
 
 
 def observe(
@@ -188,8 +197,8 @@ def observe(
 
     try:
         with Runner() as runner:
-            util.thread_local.runner = runner
             util.thread_local.loop = runner.get_loop()
+            util.thread_local.runner = runner
 
             if as_controller:
                 message_broker = zero.ZeroBroker(**broker_config)
@@ -205,11 +214,19 @@ def observe(
                     observer.network_overview.subscribe('state', observer.ministats)
             else:  # just a node for receivers.
                 observer = HFDLObserverNode(settings)
-            runner.run(async_observe(observer))
+            try:
+                runner.run(async_observe(observer))
+            except asyncio.CancelledError:
+                logger.error('Observer loop cancelled')
+                try:
+                    runner.run(observer.shutdown())
+                    runner.run(observer.stop())
+                except asyncio.CancelledError:
+                    logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
+                except RecursionError:
+                    logger.error(f'could not kill all the things: {list(asyncio.all_tasks())}')
 
         logger.info("HFDLObserver done.")
-    except asyncio.CancelledError:
-        pass
     except Exception as exc:
         logger.error("Fatal error encountered", exc_info=exc)
     finally:
@@ -269,13 +286,18 @@ def command(
         handler.setFormatter(logging.Formatter('%(asctime)s [%(name)s] %(levelname)s - %(message)s'))
 
     # if not executed in a tty-like thing, headless is forced.
-    headless = headless or node or not sys.stdout.isatty()
-    if headless:
-        setup_logging(handler, debug)
-        observe(as_controller=not node)
-    else:
-        import cui
-        cui.screen(handler, debug)
+    try:
+        headless = headless or node or not sys.stdout.isatty()
+        if headless:
+            setup_logging(handler, debug)
+            observe(as_controller=not node)
+        else:
+            import cui
+            cui.screen(handler, debug)
+    except Exception as exc:
+        # will this catch the annoying libzmq assertion failures?
+        print(f'exiting due to exception: {exc}')
+        print(str(exc.__traceback__))
 
 
 if __name__ == '__main__':

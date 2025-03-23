@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 import hfdl_observer.bus as bus
 import hfdl_observer.env
@@ -125,6 +125,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     last_seen: datetime.datetime
     pings_sent: int = 0
     weight: int = data.DEFAULT_RECEIVER_WEIGHT
+    direct_subscriber: bus.RemoteSubscriber | None = None
 
     def __init__(
         self, name: str, uuid: str, observable_widths: list[int], weight: int = data.DEFAULT_RECEIVER_WEIGHT
@@ -163,7 +164,12 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
             for frequency in frequencies or []:
                 network.set_receiver_for_frequency(frequency, self.name)
         else:
-            logger.info(f'{self} bad listening notification. ({payload["uuid"]}) {len(frequencies)} frequencies')
+            logger.info(f'{self} bad notification. ({payload["uuid"]}) {len(frequencies)} frequencies #{self.pings_sent}')
+            del payload['frequencies']
+            bus.REMOTE_BROKER.publish(bus.Message(self.target, "deregister", payload))
+            if self.direct_subscriber is not None:
+                self.direct_subscriber._stop()
+                self.direct_subscriber = None
             self.pings_sent += 1  # penalize me.
 
     def on_remote_pong(self, message: bus.Message) -> None:
@@ -192,6 +198,9 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
 
     def deregistered(self) -> None:
         self.relay('deregistered', self.uuid)
+
+    def recently_alive(self) -> bool:
+        return self.pings_sent <= 3
 
 
 class AbstractOrchestrator(bus.LocalPublisher, data.ChannelObserver):
@@ -293,7 +302,7 @@ class UniformOrchestrator(AbstractOrchestrator):
         keeps = {}
         starts: list[data.ObservingChannel] = []
         ordered_proxies = sorted(self.proxies, key=self.proxy_sort_key, reverse=True)
-        logger.info(f'Receivers: {list(p.name for p in ordered_proxies)}')
+        logger.debug(f'Receivers: {list(p.name for p in ordered_proxies)}')
         available = ordered_proxies.copy()
         for channel in channels:
             for receiver in ordered_proxies:
@@ -328,6 +337,7 @@ class UniformOrchestrator(AbstractOrchestrator):
                 logger.info(f'starts\n{EOL.join(str(s) for s in starts)}')
 
     def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
+        self.validate_proxies()
         if not self.proxies:
             return []
         channels = self.pick_channels(targetted)
@@ -336,6 +346,12 @@ class UniformOrchestrator(AbstractOrchestrator):
         actual_channels = self.merge_channels(channels)
         self.assign_channels(actual_channels)
         return actual_channels
+
+    def validate_proxies(self) -> None:
+        for proxy in self.proxies[:]:
+            if not proxy.recently_alive():
+                logger.warning(f'proxy {proxy.name}:{proxy} is dead. Removing.')
+                self.remove_receiver(proxy)
 
 
 class DiverseOrchestrator(UniformOrchestrator):
@@ -363,8 +379,6 @@ class DiverseOrchestrator(UniformOrchestrator):
         for proxy in sorted(self.proxies, key=self.proxy_sort_key, reverse=True):
             actual_channels.append(data.ObservingChannel(max(proxy.observable_widths()), []))
 
-        # actual_channels.sort(key=lambda e: e.allowed_width_hz, reverse=True)
-
         # merge the atomic channels into the possible proxy channels.
         for channel in channels:
             for proxy_channel in actual_channels:
@@ -381,7 +395,6 @@ class DiverseOrchestrator(UniformOrchestrator):
         active_count = len([f for f in assigned if network.STATIONS.is_active(f)])
         extra = untargetted_count
         logger.info(f'Listening to {targetted_count} of {active_count} active frequencies (+{extra} extra).')
-        # logger.info(f'actual channels\n{EOL.join(repr(c) for c in actual_channels)}')
 
         return actual_channels
 
@@ -509,17 +522,17 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.publish('observing', (targetted, untargetted))
         self.publish('frequencies', targetted_freqs)
 
-    def killables(self) -> list[Coroutine]:
-        outstanding = [
+    def outstanding_awaitables(self) -> list[Awaitable]:
+        outstanding: list[Awaitable] = [
             self.announcer.stop(),
             self.watchdog.stop(),
             self.recipient_subscriber.stop(),
         ]
         return outstanding
 
-    async def kill(self) -> None:
-        logger.warning(f'{self} killed')
-        await asyncio.gather(*self.killables())
+    async def stop(self) -> None:
+        logger.warning(f'{self} stopped')
+        await asyncio.gather(*self.outstanding_awaitables(), return_exceptions=True)
         logger.info(f'{self} tasks halted')
 
     def heartbeat(self) -> None:
@@ -527,7 +540,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         for name, proxy in list(self.proxies.items()):
             if proxy.last_seen < horizon:
                 if proxy.pings_sent > 3:
-                    logger.warning(f'proxy {name}:{proxy} may be dead. Removing.')
+                    logger.warning(f'proxy {name}:{proxy} appears dead. Removing.')
                     self.deregister_remote(proxy.name, proxy.uuid)
                 else:
                     proxy.ping(self.uuid)
