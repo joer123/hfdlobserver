@@ -256,17 +256,20 @@ class PacketWatcher(data.AbstractPacketWatcher):
     @pony.orm.db_session(strict=True)
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         position = packet_info.position or (None, None)
-        ReceivedPacket(
-            when=to_timestamp(util.now()),
-            agent=packet_info.station or '(unknown)',
-            ground_station=packet_info.ground_station['id'],
-            frequency=packet_info.frequency,
-            kind='spdu' if packet_info.is_squitter else 'lpdu',
-            uplink=packet_info.is_uplink,
-            latitude=position[0],
-            longitude=position[1],
-            receiver=network.receiver_for(packet_info.frequency),
-        )
+        try:
+            ReceivedPacket(
+                when=to_timestamp(util.now()),
+                agent=packet_info.station or '(unknown)',
+                ground_station=packet_info.ground_station['id'],
+                frequency=packet_info.frequency,
+                kind='spdu' if packet_info.is_squitter else 'lpdu',
+                uplink=packet_info.is_uplink,
+                latitude=position[0],
+                longitude=position[1],
+                receiver=network.receiver_for(packet_info.frequency),
+            )
+        except TypeError as exc:
+            logger.info(f'bad packet? {exc}\n{packet_info.packet}')
         db.commit()
 
     def recent_packets(cls, at: datetime.datetime) -> Sequence[ReceivedPacket]:
