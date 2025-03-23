@@ -7,6 +7,8 @@
 import asyncio
 import collections
 import collections.abc
+import concurrent.futures
+import contextlib
 import datetime
 import json
 import logging
@@ -15,7 +17,7 @@ import os
 import re
 import threading
 
-from typing import Any, Callable, Coroutine, Union
+from typing import Any, AsyncGenerator, Callable, Coroutine, IO, Union
 
 logger = logging.getLogger(__name__)
 thread_local = threading.local()
@@ -122,6 +124,12 @@ class Pipe:
         self.close_write()
         self.close_read()
 
+    def __enter__(self) -> 'Pipe':
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
 
 def is_bad_file_descriptor(error: OSError) -> bool:
     # for now, naive.
@@ -176,3 +184,38 @@ async def cleanup_task(task: asyncio.Task) -> None:
         pass
     except Exception as exc:
         logger.warning(f'{task} produced {exc} on cleanup')
+
+
+async def async_reader(openable: IO[Any] | None) -> asyncio.StreamReader | None:
+    if openable is None:
+        return None
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+    reader = asyncio.StreamReader(loop=loop)
+    reader_protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: reader_protocol, openable)
+    return reader
+
+
+class aclosing(contextlib.AbstractAsyncContextManager):
+    # version of contextlib.aclosing that tries to relinquish running state of generator before closing it.
+    def __init__(self, thing: AsyncGenerator) -> None:
+        self.thing = thing
+
+    async def __aenter__(self) -> AsyncGenerator:
+        return self.thing
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        await asyncio.sleep(0)
+        await self.thing.aclose()
+
+
+async def in_thread(func: Callable, *args: Any, **kwargs: Any) -> Any:
+    # Runs a function in a separate thread via an executor in the current event loop so it can be awaited.
+    if not hasattr(thread_local, 'executor'):
+        thread_local.executor = concurrent.futures.ThreadPoolExecutor(max_workers=64)
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+
+    def run() -> Any:
+        return func(*args, **kwargs)
+
+    return await loop.run_in_executor(thread_local.executor, run)
