@@ -38,7 +38,7 @@ class RemoteBroker:
         self.host = config.get('host', 'localhost')
         self.pub_port = config.get('pub_port', 5559)
         self.sub_port = config.get('sub_port', 5560)
-        self.context = zero.GLOBAL_CONTEXT
+        self.context = zero.get_thread_context()
         self._publisher = self.publisher()
 
     def subscriber(self, target: str) -> RemoteSubscriber:
@@ -51,8 +51,13 @@ class RemoteBroker:
         return RemotePublisher(self.host, self.pub_port, context=self.context)
 
     def publish(self, message: Message) -> None:
-        logger.debug(f'queuing {message}')
-        util.schedule(self._publisher.publish(message))
+        if not hasattr(self, '_publisher'):  # race condition if we're asked to publish before we're initialized.
+            return
+        try:
+            util.schedule(self._publisher.publish(message))
+            logger.debug(f'queued {message}')
+        except AttributeError:
+            logger.debug(f'dropping {message}')
 
     async def publish_now(self, message: Message) -> None:
         logger.debug(f'pushing {message}')
@@ -231,14 +236,15 @@ class StreamWatcher(RoutineTask, LocalPublisher):
 
     async def run(self) -> None:
         logger.debug(f'watching {self.stream}')
-        async for data in self.stream:
-            line = data.decode('utf8').rstrip()
-            if self.debug_logger:
-                self.debug_logger.info(line)
-            self.publish('line', line)
-            if not self.enabled:
-                break
-            await asyncio.sleep(0)
+        async with util.aclosing(self.stream) as stream:
+            async for data in stream:
+                line = data.decode('utf8').rstrip()
+                if self.debug_logger:
+                    self.debug_logger.info(line)
+                self.publish('line', line)
+                await asyncio.sleep(0)
+                if not self.enabled:
+                    break
         logger.info(f'finished watching {self.stream}')
 
 
