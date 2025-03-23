@@ -18,8 +18,13 @@ import zmq.asyncio
 import hfdl_observer.util as util
 
 Context = zmq.asyncio.Context
-GLOBAL_CONTEXT = Context.instance()
 logger = logging.getLogger(__name__)
+
+
+def get_thread_context() -> Context:
+    if not hasattr(util.thread_local, 'zmq_context'):
+        util.thread_local.zmq_context = Context.instance()
+    return util.thread_local.zmq_context  # type: ignore
 
 
 class ZeroBroker:
@@ -42,12 +47,12 @@ class ZeroBroker:
         xsub = context.socket(zmq.XSUB)
         xsub.bind(f"tcp://{self.host}:{self.pub_port}")
 
-        zmq.proxy(xpub, xsub)
-
-        # We never get here...
-        xpub.close()
-        xsub.close()
-        context.term()
+        try:
+            zmq.proxy(xpub, xsub)
+        finally:
+            xpub.close()
+            xsub.close()
+            context.term()
 
     def start(self, daemon: bool = True) -> None:
         if not self.thread:
@@ -61,7 +66,7 @@ class Message:
     subject: str
     payload: Any
 
-    def __str(self) -> str:
+    def __str__(self) -> str:
         body: str
         if isinstance(self.payload, str):
             body = self.payload
@@ -80,7 +85,7 @@ class ZeroSubscriber:
     socket: Optional[zmq.Socket] = None
 
     def __init__(self, url: str, channel: str, context: Optional[zmq.asyncio.Context] = None):
-        self.context = context or GLOBAL_CONTEXT
+        self.context = get_thread_context()
         self.callbacks = []
         self.channel = channel
         self.url = url
@@ -110,14 +115,20 @@ class ZeroSubscriber:
                 for filter, callback in self.callbacks:
                     if not filter or filter(message):
                         util.call_soon(callback, message)
+        except asyncio.CancelledError:
+            pass
         finally:
             # logger.info(f'no longer subscribed to {self.url}/{self.channel}')
-            self.socket.setsockopt(zmq.LINGER, 0)
-            self.socket.close()
+            self.socket.close(1)
             self.socket = None
 
     async def stop(self) -> None:
+        self._stop()
+
+    def _stop(self) -> None:
         self.running = False
+        if self.socket is not None:
+            self.socket.close(1)
 
 
 class ZeroPublisher:
@@ -127,7 +138,7 @@ class ZeroPublisher:
     socket: Optional[zmq.Socket] = None
 
     def __init__(self, host: str, port: int, context: Optional[zmq.asyncio.Context] = None):
-        self.context = context or GLOBAL_CONTEXT
+        self.context = get_thread_context()
         self.host = host
         self.port = port
 
@@ -138,23 +149,35 @@ class ZeroPublisher:
 
     def stop(self) -> None:
         if self.socket is not None:
-            self.socket.setsockopt(zmq.LINGER, 0)
-            self.socket.close()
+            self.socket.close(1)
             self.socket = None
+
+    def available(self) -> bool:
+        return self.socket is not None
 
     async def publish(self, message: Message) -> None:
         await self._publish(f'{message.target}|{message.subject}', json.dumps(message.payload))
 
     async def multi_publish(self, targets: list[str], subject: str, payload: Any) -> None:
         json_payload = json.dumps(payload)
-        await asyncio.gather(*[self._publish(f'{target}|{subject}', json_payload) for target in targets])
+        await asyncio.gather(
+            *[self._publish(f'{target}|{subject}', json_payload) for target in targets],
+            return_exceptions=True
+        )
 
     async def _publish(self, channel: str, payload: str) -> None:
         encoded_channel = channel.encode()
         encoded_payload = payload.encode()
         if self.socket is None:
             # logger.info('publisher not connected')
-            self.start()
+            try:
+                self.start()
+            except OSError as err:
+                logger.info(f'publisher error {err}')
         if self.socket is not None:
             logger.debug(f'publish c={channel} l={len(encoded_payload)}')
             await self.socket.send_multipart([encoded_channel, encoded_payload])
+
+    def __del__(self) -> None:
+        if self.socket is not None:
+            self.stop()
