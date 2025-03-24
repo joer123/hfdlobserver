@@ -1,101 +1,95 @@
-configs:
-  client:
-    default:
+# Tandem
+#
+# This example sketches out the important parts of a configuration where there is more than one Web-888 device
+# available. The `local_receivers` must all be specified, and separate `receivers` entries should exist for each
+# different web-888 device. If they reference the base (builtin) `web888` receiver type, you can provide the common
+# dumphfdl/decoder options in the `dumphfdl/default` configuration section and they'll be used for all.
+#
+# If you have any custom settings in your previous settings YAML, you can add them in. This is not necessarily a
+# complete runnable example.
+#
+receivers:
+  web888-1:
+    receiver: web888
+    client:
       address: FIRST-888
       port: 8073
-      recorder_path: kiwiclient/kiwirecorder.py
-    second:
+  web888-2:
+    receiver: web888
+    client:
       address: SECOND-888
       port: 8073
-      recorder_path: kiwiclient/kiwirecorder.py
-      settle_time: 1
-      quiet: False
-      username: 'kiwi_nc:observer888'
-      channel_bandwidth: 12
-      max_channel: 13
-      agc_files:
-        '*': 'agc.yaml'
-        2: 'agc-02M.yaml'
-        3: 'agc-03M.yaml'
-        4: 'agc-04M.yaml'
-        5: 'agc-05M.yaml'
-        6: 'agc-06M.yaml'
-        8: 'agc-08M.yaml'
-        10: 'agc-10M.yaml'
-        11: 'agc-11M.yaml'
-        13: 'agc-13M.yaml'
-        15: 'agc-15M.yaml'
-        17: 'agc-17M.yaml'
-        21: 'agc-21M.yaml'
-  receiver:
-    second888:
-      type: 'Web888ExecReceiver'
-      client:
-        type: 'KiwiClientProcess'
-        config: second
-      decoder:
-        type: 'IQDecoderProcess'
-        config: 'default'
-  decoder:
-    ... no changes required if this section exists...
-observer888:
-  hfdl_listener:
-    ... no changes required if this section exists...
+dumphfdl:
+  default:
+    station_id: 'XX-YYYY-ZZZZ'
+    statsd_server: ... if present ...
+    output:
+      - output: hfdl_observer
+      - output: acars_router
+        address: acars-address
+        port: acars-port
+observer:
   local_receivers:
-    - observer-01
-    - observer-02
-    - observer-03
-    - observer-04
-    - observer-05
-    - observer-06
-    - observer-07
-    - observer-08
-    - observer-09
-    - observer-10
-    - observer-11
-    - observer-12
-    - observer-13
-    - observer-14
-    - observer-15
-    - observer-16
-    - observer-17
-    - observer-18
-    - observer-19
-    - observer-20
-    - observer-21
-    - observer-22
-    - observer-23
-    - observer-24
-    - observer-25
-    - observer-26
-  all_receivers:
-    observer-14:
-      config: second888
-    observer-15:
-      config: second888
-    observer-16:
-      config: second888
-    observer-17:
-      config: second888
-    observer-18:
-      config: second888
-    observer-19:
-      config: second888
-    observer-20:
-      config: second888
-    observer-21:
-      config: second888
-    observer-22:
-      config: second888
-    observer-23:
-      config: second888
-    observer-24:
-      config: second888
-    observer-25:
-      config: second888
-    observer-26:
-      config: second888
+    - name: web888-1-01
+      receiver: web888-1
+    - name: web888-1-02
+      receiver: web888-1
+    - name: web888-1-03
+      receiver: web888-1
+    - name: web888-1-04
+      receiver: web888-1
+    - name: web888-1-05
+      receiver: web888-1
+    - name: web888-1-06
+      receiver: web888-1
+    - name: web888-1-07
+      receiver: web888-1
+    - name: web888-1-08
+      receiver: web888-1
+    - name: web888-1-09
+      receiver: web888-1
+    - name: web888-1-10
+      receiver: web888-1
+    - name: web888-1-11
+      receiver: web888-1
+    - name: web888-1-12
+      receiver: web888-1
+    - name: web888-1-13
+      receiver: web888-1
+    - name: web888-2-01
+      receiver: web888-2
+    - name: web888-2-02
+      receiver: web888-2
+    - name: web888-2-03
+      receiver: web888-2
+    - name: web888-2-04
+      receiver: web888-2
+    - name: web888-2-05
+      receiver: web888-2
+    - name: web888-2-06
+      receiver: web888-2
+    - name: web888-2-07
+      receiver: web888-2
+    - name: web888-2-08
+      receiver: web888-2
+    - name: web888-2-09
+      receiver: web888-2
+    - name: web888-2-10
+      receiver: web888-2
+    - name: web888-2-11
+      receiver: web888-2
+    - name: web888-2-12
+      receiver: web888-2
+    - name: web888-2-13
+      receiver: web888-2
   conductor:
-    ... no changes required if this section exists...
-  tracker:
-    ... no changes required if this section exists...
+    # or whatever you have
+    ranked_stations: [4, 1, 13, 11, 17, 7, 2, 3, 9, 5, 10, 16, 15, 14, 8, 6]
+cui:
+  ticker:
+    show_all_active: no
+    show_active_line: yes
+    show_targetting: no
+    show_confidence: yes
+    show_quiet: no
+    display_mode: frequency

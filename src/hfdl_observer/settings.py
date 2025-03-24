@@ -71,19 +71,23 @@ def dereference_decoder(decoder: MutableMapping, *configs: MutableMapping) -> Mu
     return decoder
 
 
-def dereference_receiver(receiver: MutableMapping, *configs: MutableMapping) -> MutableMapping:
+def dereference_receiver(receiver: MutableMapping, *configs: MutableMapping, level: int = 0) -> MutableMapping:
+    # print(f'dereference receiver {receiver.get('name', 'anon')} = {receiver.get('receiver', 'n/a')}')
     try:
         key = receiver['receiver']
     except KeyError:
         return receiver
-    bases = [config.get('receivers', {}).get(key, {}) for config in configs]
-    sources = [receiver] + bases
+    if level > 3:  # really naive way to break cycles. But really, you shouldn't be doing this much nesting.
+        return receiver
+    templates = [config.get('receivers', {}).get(key, {}) for config in configs]
+    sources = [receiver] + templates
     _decoder = util.DeepChainMap(*[s['decoder'] for s in sources if 'decoder' in s])
     decoder = {'decoder': dereference_decoder(_decoder, *configs)}
 
     declared = {k: v for k, v in receiver.items() if k != 'decoder'}
-    defaults = [{k: v for k, v in base.items() if k != 'decoder'} for base in bases]
-    return util.DeepChainMap(decoder, declared, *defaults)
+    templated = [dereference_receiver(template, *configs, level=level + 1) for template in templates]
+
+    return util.DeepChainMap(decoder, declared, *templated)
 
 
 def dereference_receivers(receivers: list, *configs: MutableMapping) -> list:
@@ -371,7 +375,12 @@ def get_dumper() -> type[yaml.SafeDumper]:
 
 
 if __name__ == '__main__':
-    loaded = load('config.yaml')
+    import sys
+    if len(sys.argv) > 1:
+        filename = sys.argv[1]
+    else:
+        filename = 'custom.yaml'
+    loaded = load(filename)
     resolved = dict(loaded)
     for key in ['observer', 'cui', 'node', 'viewer']:
         resolved[key] = chained(key, loaded, defaults)
