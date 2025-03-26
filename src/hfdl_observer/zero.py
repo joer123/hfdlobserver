@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 def get_thread_context() -> Context:
     if not hasattr(util.thread_local, 'zmq_context'):
-        util.thread_local.zmq_context = Context.instance()
+        context = util.thread_local.zmq_context = Context.instance()
+        context.setsockopt(zmq.LINGER, 0)
     return util.thread_local.zmq_context  # type: ignore
 
 
@@ -38,6 +39,7 @@ class ZeroBroker:
 
     def run(self) -> None:
         context = zmq.Context()
+        context.setsockopt(zmq.LINGER, 0)
 
         # Socket facing clients
         xpub = context.socket(zmq.XPUB)
@@ -50,8 +52,8 @@ class ZeroBroker:
         try:
             zmq.proxy(xpub, xsub)
         finally:
-            xpub.close()
-            xsub.close()
+            xpub.close(0)
+            xsub.close(0)
             context.term()
 
     def start(self, daemon: bool = True) -> None:
@@ -105,25 +107,29 @@ class ZeroSubscriber:
         self.socket.setsockopt(zmq.SUBSCRIBE, self.channel.encode())
 
         try:
-            while self.running:
+            while self.running and self.socket:
                 try:
                     parts = await asyncio.wait_for(self.socket.recv_multipart(), 15)
                 except asyncio.TimeoutError:
-                    break
+                    continue
                 header, body = parts
                 payload = json.loads(body.decode())
                 target, subject = header.decode().split('|', 1)
                 message = Message(target=target, subject=subject, payload=payload)
-                logger.debug(f'received {message}')
+                logged = False
                 for filter, callback in self.callbacks:
                     if not filter or filter(message):
+                        if not logged:
+                            # logger.debug(f'accepted {message}')
+                            logged = True
                         util.call_soon(callback, message)
         except asyncio.CancelledError:
             pass
         finally:
-            # logger.info(f'no longer subscribed to {self.url}/{self.channel}')
-            self.socket.close(1)
-            self.socket = None
+            logger.debug(f'no longer subscribed to {self.url}/{self.channel}')
+            if self.socket:
+                self.socket.close(0)
+                self.socket = None
 
     async def stop(self) -> None:
         self._stop()
@@ -131,7 +137,9 @@ class ZeroSubscriber:
     def _stop(self) -> None:
         self.running = False
         if self.socket is not None:
-            self.socket.close(1)
+            logger.warning(f'will close socket for {self}')
+            self.socket.close(0)
+            self.socket = None
 
 
 class ZeroPublisher:
@@ -152,7 +160,8 @@ class ZeroPublisher:
 
     def stop(self) -> None:
         if self.socket is not None:
-            self.socket.close(1)
+            logger.warning(f'will close socket for {self}')
+            self.socket.close(0)
             self.socket = None
 
     def available(self) -> bool:
