@@ -81,8 +81,17 @@ class HFDLPacketInfo:
             return self.get(cdr, data=node, default=default)
         return node
 
+    def decode_pos(self, lat: dict | str | float, lon: dict | str | float) -> tuple[float, float]:
+        def decode(p: dict | str | float) -> float:
+            if isinstance(p, dict):
+                direction = -1 if p.get('dir') in ['west', 'south'] else 1
+                return direction * float(p.get('deg', 0))
+            return float(p)
+
+        return (decode(lat), decode(lon))
+
     @property
-    def position(self) -> Optional[tuple[str, str]]:
+    def position(self) -> Optional[tuple[str | float, str | float]]:
         # position could be in several places...
         # all in "hfdl.lpdu.hfnpdu"
         # "pos"
@@ -95,15 +104,15 @@ class HFDLPacketInfo:
             if hfnpdu:
                 pos = hfnpdu.get('pos')
                 if pos:
-                    return (pos['lat'], pos['lon'])
+                    return self.decode_pos(pos['lat'], pos['lon'])
                 for tag in self.get(['acars', 'arinc622', 'adsc', 'tags'], hfnpdu) or []:
                     pos = tag.get('basic_report')
                     if pos:
-                        return (pos['lat'], pos['lon'])
+                        return self.decode_pos(pos['lat'], pos['lon'])
                 for p in [self.cpdlc_pos, self.cpdlc_alt]:
                     pos = self.get(p, hfnpdu)
                     if pos:
-                        return (pos['lat'], pos['lon'])
+                        return self.decode_pos(pos['lat'], pos['lon'])
         except KeyError:
             pass
 
