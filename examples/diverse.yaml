@@ -3,7 +3,6 @@ dumphfdl:
     station_id: 'XX-YYYY-ZZZZ'
     output:
       # examples, if you have your own set, you can reuse them here.
-      - output: hfdl_observer
       - output: acars_router
         address: acars-address
         port: acars-port
