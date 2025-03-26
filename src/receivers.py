@@ -276,7 +276,7 @@ class Web888ExecReceiver(Web888Receiver):
     async def run(self) -> AsyncGenerator:
         self.publish_listening()
         if not self.channel:
-            logger.info(f'{self} channel was empty')
+            logger.debug(f'{self} channel was empty')
             return
         await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
         if self.client is None:

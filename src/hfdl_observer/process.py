@@ -96,7 +96,7 @@ class Command:
         elif self.current_state and self.current_state.event == 'preparing':
             return True
         # Command is dead. Make it so.
-        self.logger.info(f'{self} appears dead. Stopping')
+        self.logger.debug(f'{self} appears dead. Stopping/cleaning up')
         util.schedule(self.stop())
         return False
 
@@ -153,6 +153,7 @@ class Command:
                     self.logger.info(f'retrying {tries} (descriptor)')
                 except asyncio.TimeoutError:
                     self.logger.info(f'retrying {tries} (timeout)')
+                    spawner.cancel()
             else:
                 raise ValueError('Could not start process after 3 tries')
             self.process = process
@@ -161,13 +162,14 @@ class Command:
             yield CommandState('running', process.pid, process=process)
 
             try:
-                stderr_reader = await util.async_reader(process.stderr)
-                async with self.watch_stderr(process.pid, stderr_reader):
-                    retcode = await util.in_thread(process.wait)
+                async with util.async_reader(process.stderr) as stderr_reader:
+                    async with self.watch_stderr(process.pid, stderr_reader) as stderr_task:
+                        self.process_logger.info(f'launched {stderr_task}')
+                        retcode = await util.in_thread(process.wait)
                 if retcode not in self.valid_return_codes:
                     self.process_logger.info(f'exited with {retcode}')
                 else:
-                    self.process_logger.debug(f'exited with {retcode}')
+                    self.process_logger.info(f'exited with {retcode}')
             except asyncio.CancelledError:
                 self.process_logger.info("mapping cancellation to exit")
                 pass
@@ -242,20 +244,24 @@ class Command:
         await self.terminate()
 
     @contextlib.asynccontextmanager
-    async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> AsyncIterator[None]:
-        self.process_logger.debug('starting error watcher')
-        self.watcher_task = util.schedule(self._watch_stderr(pid, stream))
-        try:
-            yield None
-        finally:
-            await util.cleanup_task(self.watcher_task)
+    async def watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> AsyncIterator[asyncio.Task]:
+        if stream is None:
+            self.process_logger.warning(f'{self} no stderr stream to watch')
+        else:
+            self.process_logger.debug('starting error watcher')
+            self.watcher_task = util.schedule(self._watch_stderr(pid, stream))
+            try:
+                yield self.watcher_task
+            finally:
+                self.process_logger.info(f'{self} cleanup stderr watcher')
+                await util.cleanup_task(self.watcher_task)
 
     async def _watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
         stream_logger = None
         if stream:
-            stream_logger = self.process_logger
+            stream_logger = (self.process_logger or self.logger or logger)
             try:
-                # does not (cannot) use util.aclosing()
+                logger.debug(f'{self} listening to {stream}')
                 async for data in stream:
                     try:
                         line = data.decode('utf8').rstrip()
@@ -326,7 +332,7 @@ class ProcessHarness:
             # clean up any previous pids. This should not be necessary, but it seems that some USB based radios can
             # linger past exit.
             try:
-                self.logger.info(f'will cleanup pid {pid}')
+                self.logger.debug(f'will cleanup pid {pid}')
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 self.logger.info(f'pid {pid} cleared')
@@ -342,7 +348,7 @@ class ProcessHarness:
             self.backoff_time = 0
 
     def on_running(self, process: asyncio.subprocess.Process, context: Any) -> None:
-        self.logger.info(f'with pid {process.pid}')
+        self.logger.debug(f'with pid {process.pid}')
         self.previous_pids.append(process.pid)
 
     def is_running(self) -> bool:

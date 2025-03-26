@@ -186,14 +186,28 @@ async def cleanup_task(task: asyncio.Task) -> None:
         logger.warning(f'{task} produced {exc} on cleanup')
 
 
-async def async_reader(openable: IO[Any] | None) -> asyncio.StreamReader | None:
-    if openable is None:
-        return None
-    loop: asyncio.AbstractEventLoop = thread_local.loop
-    reader = asyncio.StreamReader(loop=loop)
-    reader_protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: reader_protocol, openable)
-    return reader
+class async_reader(contextlib.AbstractAsyncContextManager):
+    transport: asyncio.ReadTransport | None = None
+
+    def __init__(self, openable: IO[Any] | None) -> None:
+        self.openable = openable
+
+    async def __aenter__(self) -> asyncio.StreamReader | None:
+        """Wrap a readable pipe in a stream"""
+        if self.openable is None:
+            return None
+        loop: asyncio.AbstractEventLoop = thread_local.loop
+        stream_reader = asyncio.StreamReader(loop=loop)
+
+        def factory() -> asyncio.StreamReaderProtocol:
+            return asyncio.StreamReaderProtocol(stream_reader)
+
+        self.transport, _ = await loop.connect_read_pipe(factory, self.openable)
+        return stream_reader
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        if self.transport is not None:
+            self.transport.close()
 
 
 class aclosing(contextlib.AbstractAsyncContextManager):
