@@ -91,7 +91,7 @@ class HFDLPacketInfo:
         return (decode(lat), decode(lon))
 
     @property
-    def position(self) -> Optional[tuple[str | float, str | float]]:
+    def position(self) -> Optional[tuple[float, float]]:
         # position could be in several places...
         # all in "hfdl.lpdu.hfnpdu"
         # "pos"
