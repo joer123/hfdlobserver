@@ -1,14 +1,15 @@
-configs:
-  decoder:
-    default:
-      station_id: '*CO-CYTZ2-HFDL'
-    rx888mk2:
-      station_id: '*CO-CYTZ2-HFDL'
-    airspyhf:
-      station_id: '*CO-CYTZ2-HFDL'
-    # the base configuration is named this, so even though it will be used for an RSP1a, it is still named for RSPdx.
-    rspdx+sdrplay:
-      station_id: '*CO-CYTZ2-HFDL'
+dumphfdl:
+  default:
+    station_id: 'XX-YYYY-ZZZZ'
+    output:
+      # examples, if you have your own set, you can reuse them here.
+      - output: hfdl_observer
+      - output: acars_router
+        address: acars-address
+        port: acars-port
+receivers:
+  rspdx+sdrplay:
+    decoder:
       device-settings:
         # these come from SoapySDRUtil --probe and you can set these as you like.
         rfnotch_ctrl: 'false'
@@ -35,18 +36,10 @@ configs:
       # I don't know what values RSP1a or RSP2 would have here, but you should pick the right one (even if there's only
       # one, since if you omit it, this will currently fall back to the RSPdx default)
       antenna: 'Antenna B'
+
 observer:
   local_receivers:
-    - airspyhf
-    - rsp1a
-  all_receivers:
-    airspyhf-01:
-      config: soapysdr
-      decoder:
-        type: SoapySDRDecoder
-        config: airspyhf
-    rsp1a:
-      config: soapysdr
-      decoder:
-        type: SoapySDRDecoder
-        config: rspdx+sdrplay
+    - name: airspyhf-01
+      receiver: airsphyhf
+    - name: rspdx-01
+      receiver: rspdx+sdrplay

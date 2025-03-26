@@ -1,0 +1,96 @@
+# Wide888
+#
+# This example sketches out the important parts of a configuration where the Web-888 device is running a custom
+# firmware to make larger channels available in a special configuration. This is not intended for beginners.
+# Discussion about the custom firmware and its development take place in the HFDL channel of the airframes.io discord.
+# The firmware itself can be found at https://github.com/rpatel3001/red-pitaya-notes/releases .
+# The `local_receivers` must all be specified as they each require a unique port number. They reference an updated
+# base `web888` receiver definition, which is amended with the couple of changes needed. Depending where you have
+# installed the custom client, you will need to adjust the `recorder_path`. You can provide the common
+# dumphfdl/decoder options in the `dumphfdl/default` configuration section and they'll be used for all.
+#
+# If you have any custom settings in your previous settings YAML, you can add them in. This is not necessarily a
+# complete runnable example.
+#
+receivers:
+  wide888:
+    receiver: web888
+    channel_width: 307200
+    client:
+      address: FIRST-888
+      recorder_path: ../red-pitaya-notes/projects/hfdl_receiver/client/redpitayarecorder.py
+dumphfdl:
+  default:
+    station_id: 'XX-YYYY-ZZZZ'
+    # other settings
+    output:
+      # examples, if you have your own set, you can reuse them here.
+      - output: hfdl_observer
+      - output: acars_router
+        address: acars-address
+        port: acars-port
+observer:
+  local_receivers:
+    - name: wide888-01
+      receiver: wide888
+      client:
+        port: 9000
+    - name: wide888-02
+      receiver: wide888
+      client:
+        port: 9001
+    - name: wide888-03
+      receiver: wide888
+      client:
+        port: 9002
+    - name: wide888-04
+      receiver: wide888
+      client:
+        port: 9003
+    - name: wide888-05
+      receiver: wide888
+      client:
+        port: 9004
+    - name: wide888-06
+      receiver: wide888
+      client:
+        port: 9005
+    - name: wide888-07
+      receiver: wide888
+      client:
+        port: 9006
+    - name: wide888-08
+      receiver: wide888
+      client:
+        port: 9007
+    - name: wide888-09
+      receiver: wide888
+      client:
+        port: 9008
+    - name: wide888-10
+      receiver: wide888
+      client:
+        port: 9009
+    - name: wide888-11
+      receiver: wide888
+      client:
+        port: 9010
+    - name: wide888-12
+      receiver: wide888
+      client:
+        port: 9011
+    - name: wide888-13
+      receiver: wide888
+      client:
+        port: 9012
+  conductor:
+    # or whatever you have
+    ranked_stations: [4, 1, 13, 11, 17, 7, 2, 3, 9, 5, 10, 16, 15, 14, 8, 6]
+cui:
+  ticker:
+    show_all_active: no
+    show_active_line: yes
+    show_targetting: no
+    show_confidence: yes
+    show_quiet: no
+    display_mode: frequency

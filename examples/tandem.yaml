@@ -22,8 +22,9 @@ receivers:
 dumphfdl:
   default:
     station_id: 'XX-YYYY-ZZZZ'
-    statsd_server: ... if present ...
+    # other settings
     output:
+      # examples, if you have your own set, you can reuse them here.
       - output: hfdl_observer
       - output: acars_router
         address: acars-address
