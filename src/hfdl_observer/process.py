@@ -150,10 +150,9 @@ class Command:
                 except OSError as ose:
                     if not util.is_bad_file_descriptor(ose):
                         raise
-                    self.logger.info(f'retrying {tries} (descriptor)')
+                    self.logger.debug(f'retrying {tries} (descriptor)')
                 except asyncio.TimeoutError:
-                    self.logger.info(f'retrying {tries} (timeout)')
-                    spawner.cancel()
+                    self.logger.debug(f'retrying {tries} (timeout)')
             else:
                 raise ValueError('Could not start process after 3 tries')
             self.process = process
@@ -167,14 +166,14 @@ class Command:
                         self.process_logger.info(f'launched {stderr_task}')
                         retcode = await util.in_thread(process.wait)
                 if retcode not in self.valid_return_codes:
-                    self.process_logger.info(f'exited with {retcode}')
+                    self.process_logger.debug(f'exited with {retcode}')
                 else:
                     self.process_logger.info(f'exited with {retcode}')
             except asyncio.CancelledError:
                 self.process_logger.info("mapping cancellation to exit")
                 pass
             except Exception as e:
-                self.process_logger.error(f'process {process.pid} aborted.', exc_info=e)
+                self.process_logger.info(f'process {process.pid} aborted.', exc_info=e)
                 raise
         except Exception as exc:
             yield CommandState('error', exc, process=self.process)
@@ -228,7 +227,7 @@ class Command:
             except asyncio.CancelledError:
                 self.process_logger.debug(f'signal {sig} cancelled')
             except Exception as err:
-                self.process_logger.info(f'signal {sig} interrupted', exc_info=err)
+                self.process_logger.debug(f'signal {sig} interrupted', exc_info=err)
         else:
             logger.debug(f'signal {sig} is a no op... {process}, {execution_event}')
 
@@ -253,7 +252,7 @@ class Command:
             try:
                 yield self.watcher_task
             finally:
-                self.process_logger.info(f'{self} cleanup stderr watcher')
+                self.process_logger.debug(f'{self} cleanup stderr watcher')
                 await util.cleanup_task(self.watcher_task)
 
     async def _watch_stderr(self, pid: int, stream: Optional[asyncio.StreamReader]) -> None:
@@ -335,7 +334,7 @@ class ProcessHarness:
                 self.logger.debug(f'will cleanup pid {pid}')
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
-                self.logger.info(f'pid {pid} cleared')
+                self.logger.debug(f'pid {pid} cleared')
                 self.previous_pids.remove(pid)
             except OSError as err:
                 self.logger.info(f'pid {pid} could not be cleared at this time. {err}')

@@ -68,10 +68,11 @@ class GenericRemoteEventDispatcher:
     def on_remote_event(self, message: Message) -> None:
         handler = getattr(self, f'on_remote_{message.subject.strip()}', None)
         if callable(handler):
-            # logger.debug(f'dispatching {subject} via {handler}')
+            logger.debug(f'dispatching {message} via {handler}')
             handler(message)
         else:
-            logger.debug(f'ignoring on_remote_{message.subject.strip()}')
+            pass
+            # logger.debug(f'ignoring on_remote_{message.subject.strip()}')
 
 
 REMOTE_BROKER: RemoteBroker

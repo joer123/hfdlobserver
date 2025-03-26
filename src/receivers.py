@@ -423,12 +423,12 @@ class DirectReceiver(LocalReceiver):
         try:
             async with util.aclosing(self.decoder.listen(self.channel)) as lifecycle:
                 async for state in lifecycle:
-                    logger.info(f'{self} reached state {state.event}')
+                    logger.debug(f'{self} reached state {state.event}')
                     yield state
         except asyncio.CancelledError:
-            logger.info(f'{self} cancelled')
-        except Exception as err:
-            logger.error(f'{self} encountered an error', exc_info=err)
+            logger.debug(f'{self} cancelled')
+        except Exception:  # as err:
+            logger.info(f'{self} encountered an error')  # , exc_info=err)
 
     async def stop(self) -> None:
         self.logger.debug('Stopping')
