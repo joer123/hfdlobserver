@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hfdlobserver.sh
-# copyright 2024 Kuupa Ork <kuupaork+github@hfdl.observer>
+# copyright Kuupa Ork <kuupaork+github@hfdl.observer>
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
@@ -19,5 +19,14 @@ fi
 echo "Using virtual environment at ${VENV}"
 source "${VENV}/bin/activate"
 # pip install -q -q -q --exists-action i -r requirements.txt
-export PYTHONPATH="${SCRIPT_DIR}/src"
-exec python3 "${SCRIPT_DIR}/src/hfdlobserver.py" "${@}"
+case "${1}" in
+    "configure")
+        exec python3 "${SCRIPT_DIR}/configure.py"
+        ;;
+    "requirements")
+        exec pip install -r "${SCRIPT_DIR}/requirements.txt"
+        ;;
+    *)
+        export PYTHONPATH="${SCRIPT_DIR}/src"
+        exec python3 "${SCRIPT_DIR}/src/hfdlobserver.py" "${@}"
+esac

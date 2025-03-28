@@ -35,10 +35,6 @@ settings = yaml.safe_load(pathlib.Path('settings.yaml.base').read_text())
 
 w = Whiptail('Configure HFDL Observer', backtitle='A multi-headed dumphfdl receiver')
 
-w.msgbox("Unfortunately, this tool needs a major update due to changes in configuration management. This has not yet been completed, so this tool will exit now.")
-
-sys.exit(0)
-
 w.msgbox("""Welcome to HFDL Observer. Let's set up a simple configuration.
 
 Web-888 can provide 13 streams of IQ data. HFDL Observer takes advantage of these to listen to as many useful HFDL frequencies as possible at any given time. In order to pick the right frequencies, you need to configure a prioritized list of station IDs.
@@ -101,15 +97,13 @@ if code == 1:
     sys.exit()
 if entered:
     entered = entered.rstrip('/')
-    all_receivers = default_path(settings, 'observer', 'all_receivers')
-    for rname in all_receivers:
-        default_path(all_receivers, rname, 'decoder')['packetlog'] = f'{entered}/{rname}_packet.log'
+    default_path(settings, 'receivers', 'web888', 'decoder')['packetlog'] = entered
 
 entered, code = w.inputbox("[Optional] Enter your Airframes.io station ID")
 if code == 1:
     sys.exit()
 if entered:
-    default_path(settings, 'configs', 'decoder', 'default')['station_id'] = entered
+    default_path(settings, 'dumphfdl', 'default')['station_id'] = entered
 
 
 code = w.yesno("""
@@ -133,7 +127,7 @@ while True:
     except Exception:
         w.msgbox("Please use the format <address>:<port>. Example: 'my.web888.example:1234'")
     else:
-        default_path(settings, 'configs', 'client', 'default').update({
+        default_path(settings, 'receivers', 'web888', 'client').update({
             'address': address,
             'port': port,
         })
