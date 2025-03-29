@@ -88,6 +88,7 @@ class StationAvailability(DbEntity):  # type: ignore
         before_prune = pony.orm.count(a for a in StationAvailability)
         horizon = to_timestamp(util.now() - datetime.timedelta(days=1))
         pony.orm.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
+        pony.orm.delete(a for a in StationAvailability if a.valid_to is None and a.valid_at < horizon)
         pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
         # logger.debug(f'DB size is {pages * pagesize()}')
         after_prune = pony.orm.count(a for a in StationAvailability)
