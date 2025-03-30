@@ -1,20 +1,28 @@
-# HFDL Observer
+# HFDLObserver
 
-A multi-headed dumphfdl receiver for use with Web-888 devices.
+A multi-headed dumphfdl receiver for use with Web-888 devices and other SoapySDR-compatible receivers.
 
 ## Background
 
 The dynamism of the High Frequency Data Link infrastructure poses some problems for those trying to efficiently monitor these packets. There are a wide variety of frequencies in use across the HF spectrum (in this case, between 2.5 and 22MHz). The active frequencies change depending on time of day, ionospheric conditions, and the associated ground station. Picking the correct frequencies, and switching between them is a challenge. This challenge is magnified as many available SDRs have limited sample rates, and cannot scan the entire available HFDL frequency space.
 
-Enter [RX-888 (mk2)](https://www.rx-888.com/rx/) and [Web-888](https://www.rx-888.com/web/) devices. These are advanced, yet still affordable, SDRs that can process the entire HF spectrum at the same time. 
+There are several approaches to solving this problem. A common one is to use some script or helper to change the frequencies your SDR listens to according to some rules. This could be based on regular brief empirical scans of activity across the whole HF spectrum, or picking frequencies based on active station announcements. These work okay for since SDR set ups. Managing multiple receivers to cover more of the possible (or even merely the declared active) frequencies is usually achieved by directly assigning different SDRs to specific ranges.
 
-Unfortunately, the RX-888 (mk2) suffers from limited driver availability for Linux, which is a common platform for HFDL hobbyists. HFDL stations are frequently lower power devices such as odroids, raspberry pi and the like which may not have the CPU necessary to deal with the firehose of data from the RX-888 mk2.
+### RX-888
+
+[RX-888 (mk2)](https://www.rx-888.com/rx/) and [Web-888](https://www.rx-888.com/web/) devices are advanced, yet still affordable, SDRs that can process the entire HF spectrum at the same time. This makes them very attractive to those wanting to operate an HFDL listening station. Unfortunately, HFDL stations are frequently lower power devices such as odroids, raspberry pi and the like which may not have the CPU necessary to deal with the firehose of data from the RX-888 mk2.
 
 The Web-888 offers a solution for that. It combines the receiver of an RX-888 mk2 with an FPGA programmed to do bulk processing of data, and an KiwiSDR compatible web interface, based on [Beagle SDR](https://github.com/jks-prv/Beagle_SDR_GPS) from which KiwiSDR is also derived. It offers 13 simultaneous streams/channels to process. Each channel is fairly narrow (12kHz) but that is enough to cover up to 4 HFDL frequencies (if they are close enough together).
 
 ## Features
 
-HFDL Observer makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or other consumers) easy.
+HFDLObserver helps with these problems by managing frequency assignments for an arbitrary number of diverse radios. The simplest, default case is based on the Web-888 device described above. HFDLObserver makes using a Web-888 device to receive HFDL packets (and share them with airframes.io, or other consumers) easy.
+
+Optionally, it can also retrieve updated frequency lists from community source (such as hfdl.observer or airframes.io). This covers periods where squitters (frequency updates) may not be received by your station for a time.
+
+In general, there are around 30 frequencies active globally at a given time. 
+
+### Web-888 receivers
 
 It assigns frequencies to each of 13 virtual "receivers". The assignments are based on a list of currently active frequencies ranked by a user-configured station preference (generally stations nearer your Web-888 should have higher preference).
 
@@ -22,25 +30,60 @@ It manages the `kiwirecorder` web socket clients that stream the raw data from W
 
 It watches the decoded HFDL packets for frequency updates. When the active frequency list changes, virtual receivers may be reassigned to higher-priority frequencies.
 
-Optionally, it can also retrieve updated frequency lists from community source (such as hfdl.observer or airframes.io). This covers periods where squitters (frequency updates) may not be received by your station for a time.
-
-In general, there are around 30 frequencies active globally at a given time. HFDL Observer allows your station to monitor (typically) 18-23 of them.
-
 Processing the entire HF frequency space would be very CPU-intensive. Taking advantage of the FPGA in Web-888 to select only the portions we're interested in means:
 
-- The data rate from the Web-888 to the device running HFDL Observer is around 5Mbps.
+- The data rate from the Web-888 to the device running HFDLObserver is around 5Mbps.
 - The aggregate bandwidth that needs to be scanned by all virtual receivers is around 156kHz.
 - The CPU required for the virtual receivers is about ½ of 1 core of an Odroid M1S or Raspberry Pi4 (~13% total CPU)
 
+HFDLObserver allows your station to monitor (typically) 18-23 active HFDL frequencies on a single Web-888 appliance. In addition, where possible, HFDLObserver will watch neighbouring inactive but assigned frequencies. These "extras" typically add little if anything to packet counts, but contribute to completeness.
+
+### Other radios
+
+Several other SDRs are supported by HFDLObserver, though these require manual setup, as `hfdlobserver.sh configure` does not know about them (yet). Each of these requires SoapySDR support to be built into `dumphfdl`, and this is not something that the default installer will do.
+
+### Airsphy HF+ range
+
+This is managed using the [SoapyAirspyHF](https://github.com/pothosware/SoapyAirspyHF) driver, so this must be present for an HFDLObserver receiver to use it.
+
+### SDRPlay devices
+
+This is likewise handled by the [SoapySDRPlay3](https://github.com/pothosware/SoapySDRPlay3) driver, so this must be present for an HFDLObserver receiver to use it. In addition, this requires the SDRPlay system service/driver to be available. This driver has proved very problematic on Linux. HFDLObserver tries to mitigate this by watching for errors and restarting (as carefully as a user space app can) the receiver on several error conditions. It is very good to be quite conservative in configuring SDRPlay devices, as they can easily saturate the isochronous USB-2 bus. In addition, keeping maximum sample rates to 6MS/s or less is highly recommended, as above this, the dynamic range is steadily reduced.
+
+Current known working SDRPlay devices are:
+- SDRPlay RSPdx
+
+### RX-888mk2
+
+As mentioned above, this is a great wideband SDR receiver. Its Linux driver support is not great, but the SoapySDR driver in the [ExtIO_sddc](https://github.com/ik1xpv/ExtIO_sddc) project works with HFDLObserver and `dumphfdl` fairly well. For reasons not currently understood by HFDLObserver, this driver and `dumphfdl` fail to work together above 8MS/s. But that's still a nice wide bandwidth.
+
+
+## Advanced Features
+
+HFDLObserver is evolving software. As such, it has some more advanced features that are in various stages of stability, and which generally require more expert handling for the time being. If you want to try to use one of these, drop by the [Airframes.io](https://airframes.io) Discord, in the "#𝐇𝐅〉hfdl" channel.
+
+### Other SoapySDR devices
+
+Hypothetically, any device with a SoapySDR driver should be usable under HFDLObserver, though they may take some additional advanced configuration.
+
+### Remote Devices
+
+An experimental addition to HFDLObserver is a simple network protocol for managing devices running on other "nodes" (computers). This allows you to spread high bandwidth devices across your home network. This involves installing HFDLObserver on those computers and running them in a special "node" mode. While it requires only settings changes, they're not currently documented well (coming eventually).
+
+### Receiver-less operation
+
+If you just want to use the CUI (especially the heat map) to monitor the output of many SDRs you're managing some other way, this is also possible (and not even that advanced, really). HFDLObserver gathers its packet information over a UDP port from the various decoders (`dumphfdl`) and there's no actual need for HFDLObserver to control any of the receivers itself.
+
+
 ## CUI
 
-HFDL Observer also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
+HFDLObserver also adds a simple but rich console-based display. At the top is a heat map like grid depicting the frequencies currently (or recently) being observed, and packet counts for each minute. Below that is log output. As it is console based, it can run within a `screen` session over `ssh` from a remote computer.
 
-This is a bit more CPU intensive, taking about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
+This is a bit more CPU intensive. On a web-888 connected system, it takes about the same CPU as all of the virtual receivers combined. It can be disabled, and is disabled by default when it is run as a (systemd) service.
 
-The packet count from each bin is represented by `1` to `9`, then by `a` to `z` for 10 through 35.
+The packet count from each bin is represented by `1` to `9`, then by `a` to `z` for 10 through 35, and `A` to `Z` for 36 through 61. The default bin size is 60 seconds, and it's highly unlikely you'll ever see anything above that. However, if you configure the bin size manually, you will see `✽` for such packet counts. The bin background is coloured based on the packet count, from blue through green, yellow, orange, red, and magenta to purple. This scales with the maximum packet count needed, so even when you have max packet counts, you will have *some* indication of relative density.
 
-![hfdlobserver888-screen](https://github.com/user-attachments/assets/2509f6cd-25e5-4c14-a1ea-ea42c9f0be61)
+![outdated hfdlobserver888-screen](https://github.com/user-attachments/assets/2509f6cd-25e5-4c14-a1ea-ea42c9f0be61)
 
 ### Space Weather
 
@@ -121,15 +164,15 @@ The install script automates the following steps:
    4. clone `dumphfdl`, build, and install it.
 6. Run `./configure.py` to walk through some simple configuration questions.
 
-While several helper programs are installed, they are invoked via the operating system, HFDL Observer makes no alteration to any of their code or operations, and connects only through standard mechanisms (file handles and sockets).
+While several helper programs are installed, they are invoked via the operating system, HFDLObserver makes no alteration to any of their code or operations, and connects only through standard mechanisms (file handles and sockets).
 
 ## Configuration
 
 Configuration is provided by a YAML formatted file. By default, and normally, it is `settings.yaml`.
 
-The provided `./configure.py` script asks a number of questions to provide basic configuration. For most users, this should suffice. The `src/settings.py` file contains a commented system default settings dialog for the curious, or those in need of more complex configurations. This is still in some flux, but the basic `settings.yaml` structure should be stable.
+The provided configurations script asks a number of questions to provide basic configuration. For most users, this should suffice. The `src/settings.py` file contains a commented system default settings dialog for the curious, or those in need of more complex configurations. This is still in some flux, but the basic `settings.yaml` structure should be stable.
 
-You can rerun `configure.py` at any time, and it will walk you through the questions again; subsequent runs will write to `settings.yaml.new` so you can compare and merge the files if you desire.
+You can rerun the configuration script at any time by running `hfdlobserver.sh configure` from the install directory, and it will walk you through the questions again; subsequent runs will write to `settings.yaml.new` so you can compare and merge the files if you desire.
 
 The configuration tool provides two options for setting the ranked order of HFDL stations.
 
@@ -148,22 +191,22 @@ $ extras/guess_station_ranking.py <lat> <lon>
 Once configured, you can run the receiver by
 
 ```
-$ <path-to>/hfdlobserver888.sh
+$ <path-to>/hfdlobserver.sh
 ```
 
 if you do not want the "fancy" TUI, pass in the `--headless` option. The usage is minimal, but is explained with `--help`.
 
 Hopefully, it should Just Work.
 
-In case of abnormal termination, you should kill any `kiwirecorder.py` instances that may be left hanging. This can be accomplished with the following:
+In case of abnormal termination, you should kill any `kiwirecorder.py` and `dumphfdl` instances that may be left hanging. This can be accomplished with the following:
 
 ```
-$ pkill -f kiwirecorder
+$ pkill -f kiwirecorder ; pkill -f dumphfdl
 ```
 
 ## Exiting
 
-Press `^C` (control + C). Enhance your calm, as it can take a couple of seconds to shut down cleanly.
+Press `^C` (control + C). Enhance your calm, as it can take several seconds to shut down cleanly. At present, seeing exception traces at exit is not unusual; don't worry as these are normally harmless.
 
 ## Run as a Service (very alpha)
 
@@ -175,9 +218,6 @@ $ extras/install-service.sh
 
 It then becomes a normal service named `hfdlobserver888`. Following the usual pattern, there is a very minor ability to configure it via `/etc/default/hfdlobserver888`, but most items are managed through the `settings.yaml` file.
 
-## Implementation Notes
-
-The internal structure of HFDL Observer is more complicated than it strictly needs to be. Much of this is derived from the desire to be fairly decoupled internall for future reuse. This project started as a less well defined desire to orchestrate a variety of different SDRs in sample HFDL frequencies, and it may be expanded to deal with less homogenous virtual receivers in the future. It should also abstract well to handling remote receivers, plus remote status and management (even later).
 
 ## Acknowledgements
 
