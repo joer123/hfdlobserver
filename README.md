@@ -6,7 +6,7 @@ A multi-headed dumphfdl receiver for use with Web-888 devices and other SoapySDR
 
 The dynamism of the High Frequency Data Link infrastructure poses some problems for those trying to efficiently monitor these packets. There are a wide variety of frequencies in use across the HF spectrum (in this case, between 2.5 and 22MHz). The active frequencies change depending on time of day, ionospheric conditions, and the associated ground station. Picking the correct frequencies, and switching between them is a challenge. This challenge is magnified as many available SDRs have limited sample rates, and cannot scan the entire available HFDL frequency space.
 
-There are several approaches to solving this problem. A common one is to use some script or helper to change the frequencies your SDR listens to according to some rules. This could be based on regular brief empirical scans of activity across the whole HF spectrum, or picking frequencies based on active station announcements. These work okay for since SDR set ups. Managing multiple receivers to cover more of the possible (or even merely the declared active) frequencies is usually achieved by directly assigning different SDRs to specific ranges.
+There are several approaches to solving this problem. A common one is to use some script or helper to change the frequencies your SDR listens to according to some rules. This could be based on regular brief empirical scans of activity across the whole HF spectrum, or picking frequencies based on active station announcements. These work okay for single SDR set ups. Managing multiple receivers to cover more of the possible (or even merely declared active) frequencies is usually achieved by directly assigning different SDRs to specific ranges.
 
 ### RX-888
 
