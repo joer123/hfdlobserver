@@ -93,7 +93,7 @@ class StationAvailability(DbEntity):  # type: ignore
         # logger.debug(f'DB size is {pages * pagesize()}')
         after_prune = pony.orm.count(a for a in StationAvailability)
         if after_prune < before_prune:
-            logger.info(f'pruned {before_prune - after_prune} StationAvailability records ({pages} db pages used)')
+            logger.info(f'pruned {before_prune - after_prune} StationAvailability ({after_prune} rows, {pages} pages)')
 
 
 class ReceivedPacket(DbEntity):  # type: ignore
@@ -126,7 +126,7 @@ class ReceivedPacket(DbEntity):  # type: ignore
             # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
             after_prune = pony.orm.count(r for r in ReceivedPacket)
             if after_prune < before_prune:
-                logger.info(f'pruned {before_prune - after_prune} ReceivedPacket records ({after} db pages used)')
+                logger.info(f'pruned {before_prune - after_prune} ReceivedPackets ({after_prune} rows, {after} pages)')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 
@@ -292,7 +292,6 @@ class PacketWatcher(data.AbstractPacketWatcher):
             self.periodic_task.cancel()
             await self.periodic_task
             self.periodic_task = None
-
 
     @pony.orm.db_session(strict=True)
     def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
