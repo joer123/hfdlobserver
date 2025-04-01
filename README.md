@@ -83,7 +83,8 @@ This is a bit more CPU intensive. On a web-888 connected system, it takes about 
 
 The packet count from each bin is represented by `1` to `9`, then by `a` to `z` for 10 through 35, and `A` to `Z` for 36 through 61. The default bin size is 60 seconds, and it's highly unlikely you'll ever see anything above that. However, if you configure the bin size manually, you will see `✽` for such packet counts. The bin background is coloured based on the packet count, from blue through green, yellow, orange, red, and magenta to purple. This scales with the maximum packet count needed, so even when you have max packet counts, you will have *some* indication of relative density.
 
-![outdated hfdlobserver888-screen](https://github.com/user-attachments/assets/2509f6cd-25e5-4c14-a1ea-ea42c9f0be61)
+![HFDL Observer CUI](https://github.com/user-attachments/assets/276c540b-e8ab-4bff-a726-35f77d24344f)
+
 
 ### Space Weather
 
