@@ -129,7 +129,7 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         raise NotImplementedError()
 
-    @functools.lru_cache(maxsize=512)
+    @functools.lru_cache(maxsize=128)
     def _active_ts(self, timestamp: int) -> Sequence[StationAvailability]:
         return self.active(util.timestamp_to_datetime(timestamp))
 

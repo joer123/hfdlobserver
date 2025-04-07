@@ -501,6 +501,7 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.last_orchestrated = util.now()
         self.orchestration_task = None
         targetted_freqs = network.STATIONS.active()
+        all_active: list[int] = list(itertools.chain.from_iterable(targetted_freqs.values()))
         chosen_channels = self.conductor.orchestrate(targetted_freqs, fill_assigned=True)
 
         targetted = []
@@ -512,7 +513,6 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
                 else:
                     untargetted.append(frequency)
 
-        all_active: list[int] = list(itertools.chain.from_iterable(network.STATIONS.active().values()))
         self.publish('orchestrated', {
             'targetted': targetted,
             'untargetted': untargetted,

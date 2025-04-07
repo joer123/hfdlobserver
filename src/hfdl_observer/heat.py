@@ -153,7 +153,8 @@ class TableByFrequency(Table):
         for ix, column in enumerate(self.column_headers):
             when = column.when if column.index else None  # column 0 is "NOW", which triggers different active logic.
             column_active: dict[int, network.StationAvailability] = {}
-            for a in network.UPDATER.active_for_frame(when):
+            active = network.UPDATER.active_for_frame(when)
+            for a in active:
                 for f in a.frequencies:
                     column_active[f] = a
             for freq, cells in self.bins.items():
