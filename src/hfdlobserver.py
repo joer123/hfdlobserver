@@ -157,13 +157,16 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
 
     if TRACEMALLOC:
         import tracemalloc
-        tracemalloc.start()
+        tracemalloc.start(2)
         last_snapshot = tracemalloc.take_snapshot()
+        logger.warning("tracemalloc on")
+    count = 0
     observer.start()
     while observer.running:
         await asyncio.sleep(1)
-        if TRACEMALLOC:
-            await asyncio.sleep(59)
+        count += 1
+        if TRACEMALLOC and count > 300:
+            count = 0
             p = pathlib.Path('memory.trace')
             with p.open("a", encoding='utf8') as f:
                 f.write('====\n')
@@ -172,11 +175,13 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
                 try:
                     diff = snapshot.compare_to(last_snapshot, 'lineno')
                     for e in diff:
-                        f.write(f'{e.size} | {e.size_diff} | {" ".join(str(x) for x in e.traceback.format(1))}\n')
+                        f.write(f'{e.size}|{e.size_diff}|{e.count}|{";".join(str(x) for x in e.traceback.format(5))}\n')
+                    # fname = f'memory-{util.now().isoformat().replace(':', '').replace('-', '')}.trace'
+                    # snapshot.dump(fname)
                 except Exception as err:
-                    logger.error('error in tracemallocery', exc_info=err)
+                    logger.error('error in tracemallocry', exc_info=err)
                 else:
-                    logger.info('memory checkpoint')
+                    logger.info('tracemalloc checkpoint')
                 last_snapshot = snapshot
 
 
