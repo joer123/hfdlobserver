@@ -43,6 +43,17 @@ SUBDUED_TEXT = rich.style.Style.parse('grey50 on black')
 NORMAL_TEXT = rich.style.Style.parse('white on black')
 PROMINENT_TEXT = rich.style.Style.parse('bright_white on black')
 BASIC_CELL_STYLE = rich.style.Style.parse('bright_black on black')
+BOLD = rich.style.Style.parse('bold')
+ON_DARK_GREEN = rich.style.Style.parse('on dark_green')
+FORECAST_STYLEMAP = {
+    "extreme": rich.style.Style.parse("yellow1 on dark_red"),
+    "severe": rich.style.Style.parse("black on red1"),
+    "strong": rich.style.Style.parse("black on dark_orange"),
+    "moderate": rich.style.Style.parse("black on orange1"),
+    "minor": rich.style.Style.parse("black on gold1"),
+    "none": rich.style.Style.parse("white on bright_black"),
+    None: rich.style.Style.parse("white on bright_black"),
+}
 
 
 CellText = tuple[str | None, str | rich.style.Style | None]
@@ -76,7 +87,7 @@ class ObserverDisplay:
         self.uptime_text = rich.text.Text("STARTING")
         self.forecast = rich.text.Text('(space weather unavailable)')
         self.setup_status()
-        self.totals_text = rich.text.Text('', style='white on black')
+        self.totals_text = rich.text.Text('', style=NORMAL_TEXT)
         self.setup_totals()
         self.update_status()
         self.update_tty_bar()
@@ -106,8 +117,8 @@ class ObserverDisplay:
         table.add_column(justify="right")
         text = rich.text.Text()
         text.append(' 📡 ')
-        text.append('HFDL Observer', style='bold')
-        table.add_row(text, self.forecast, self.uptime_text, style='on dark_green')
+        text.append('HFDL Observer', style=BOLD)
+        table.add_row(text, self.forecast, self.uptime_text, style=ON_DARK_GREEN)
         self.status = table
 
     def setup_totals(self) -> None:
@@ -180,37 +191,28 @@ class ObserverDisplay:
 
     def on_forecast(self, forecast: Any) -> None:
         try:
-            styles = {
-                "extreme": "yellow1 on dark_red",
-                "severe": "black on red1",
-                "strong": "black on dark_orange",
-                "moderate": "black on orange1",
-                "minor": "black on gold1",
-                "none": "white on bright_black",
-                None: "white on bright_black",
-            }
             recent = forecast['-1']
             current = forecast['0']
             forecast1d = forecast['1']
             text = self.forecast
             text.plain = ''
-            text.append(f'R{recent["R"]["Scale"] or "-"}', style=styles[recent["R"]["Text"]])
+            text.append(f'R{recent["R"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[recent["R"]["Text"]])
             text.append('|')
-            text.append(f'S{recent["S"]["Scale"] or "-"}', style=styles[recent["S"]["Text"]])
+            text.append(f'S{recent["S"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[recent["S"]["Text"]])
             text.append('|')
-            text.append(f'G{recent["G"]["Scale"] or "-"}', style=styles[recent["G"]["Text"]])
+            text.append(f'G{recent["G"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[recent["G"]["Text"]])
             text.append('  ')
-            text.append(f'R{current["R"]["Scale"] or "-"}', style=styles[current["R"]["Text"]])
+            text.append(f'R{current["R"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[current["R"]["Text"]])
             text.append('|')
-            text.append(f'S{current["S"]["Scale"] or "-"}', style=styles[current["S"]["Text"]])
+            text.append(f'S{current["S"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[current["S"]["Text"]])
             text.append('|')
-            text.append(f'G{current["G"]["Scale"] or "-"}', style=styles[current["G"]["Text"]])
+            text.append(f'G{current["G"]["Scale"] or "-"}', style=FORECAST_STYLEMAP[current["G"]["Text"]])
             text.append('  ')
-            text.append(f'R{forecast1d["R"]["MinorProb"]}/{forecast1d["R"]["MajorProb"]}', styles["none"]),
+            text.append(f'R{forecast1d["R"]["MinorProb"]}/{forecast1d["R"]["MajorProb"]}', FORECAST_STYLEMAP["none"]),
             text.append('|')
-            text.append(f'S{forecast1d["S"]["Prob"]}', styles["none"]),
+            text.append(f'S{forecast1d["S"]["Prob"]}', FORECAST_STYLEMAP["none"]),
             text.append('|')
-            text.append(f'G{forecast1d["G"]["Scale"] or "-"}', styles[forecast1d["G"]["Text"]]),
+            text.append(f'G{forecast1d["G"]["Scale"] or "-"}', FORECAST_STYLEMAP[forecast1d["G"]["Text"]]),
         except Exception as err:
             logger.warning('ignoring forecaster error', exc_info=err)
 
@@ -272,6 +274,29 @@ STROKES.update({0: '┇', 5: '¦'})
 TableSourceT = TypeVar('TableSourceT', bound='heat.Table')
 
 
+@functools.cache
+def bin_symbol(amount: int) -> str:
+    # there are 13 slots per 32 second frame.
+    # Assuming 1 minute bins and 1 packet per slot on average:
+    # we should not expect more than 25 packets per minute
+    # However, other bin sizes are possible as well so we have as many single character symbols as practical.
+    if amount == 0:
+        return '·'
+    if amount < 10:
+        return str(amount)
+    if amount < 36:
+        return chr(87 + amount)
+    if amount < 62:
+        return chr(29 + amount)
+    return '✽'
+
+
+@functools.cache
+def bin_style(amount: int, maximum: int) -> rich.style.Style:
+    rgb = util.spectrum_colour(amount, maximum)
+    return rich.style.Style(bgcolor=f'rgb({",".join(str(i) for i in rgb)})', color='black')
+
+
 class AbstractHeatMapFormatter(Generic[TableSourceT]):
     source: TableSourceT
     strokes = STROKES
@@ -286,27 +311,11 @@ class AbstractHeatMapFormatter(Generic[TableSourceT]):
     def is_empty(self) -> bool:
         return len(self.source.bins) == 0
 
-    @functools.cache
     def symbol(self, amount: int) -> str:
-        # there are 13 slots per 32 second frame.
-        # Assuming 1 minute bins and 1 packet per slot on average:
-        # we should not expect more than 25 packets per minute
-        # However, other bin sizes are possible as well so we have as many single character symbols as practical.
-        if amount == 0:
-            return '·'
-        if amount < 10:
-            return str(amount)
-        if amount < 36:
-            return chr(87 + amount)
-        if amount < 62:
-            return chr(29 + amount)
-        return '✽'
+        return bin_symbol(amount)
 
-    @functools.cache
     def style(self, amount: int) -> rich.style.Style:
-        rgb = util.spectrum_colour(amount, max(25, self.max_count))
-        return rich.style.Style(bgcolor=f'rgb({",".join(str(i) for i in rgb)})', color='black')
-        # return rich.style.Style.parse(f'bright_black on rgb({",".join(str(i) for i in rgb)})')
+        return bin_style(amount, max(25, self.max_count))
 
     def cumulative(self, row: Sequence[heat.Cell]) -> CellText:
         return (f'{sum(cell.value for cell in row): >4}', None)
@@ -371,9 +380,8 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
 
         self.source.tag_rows(targetted, ['targetted'], default_factory=rowheader_factory)
         self.source.tag_rows(untargetted, ['untargetted'], default_factory=rowheader_factory)
-        self.source.tag_rows(
-            network.UPDATER.current_freqs(), ['active'], default_factory=rowheader_factory if all_active else None
-        )
+        current_freqs = network.UPDATER.current_freqs()
+        self.source.tag_rows(current_freqs, ['active'], default_factory=rowheader_factory if all_active else None)
         self.show_active_line = show_active_line
         self.show_confidence = show_confidence
         self.show_targetting = show_targetting
@@ -427,7 +435,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
         stroke = self.strokes[index % 10]
         if cell.value:
             style = self.style(cell.value)
-            text = ' ' + self.symbol(cell.value) + ' '
+            text = f' {self.symbol(cell.value)} '
         elif self.show_active_line and cell.is_tagged('active'):
             if row_header.is_tagged('targetted'):
                 text = f'─{stroke or "─"}─'
