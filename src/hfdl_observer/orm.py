@@ -6,12 +6,13 @@
 
 import asyncio
 import collections
+import contextlib
 import datetime
 import functools
 import itertools
 import logging
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 import pony.orm
 
@@ -64,7 +65,14 @@ def pagesize() -> int:
 DbEntity = db.Entity
 
 
-class StationAvailability(DbEntity):  # type: ignore
+class Extensions:
+    to_dict: Callable[[], dict]
+
+    def untracked_dict(self) -> dict:
+        return {k: getattr(v, 'get_untracked', lambda: v)() for k, v in self.to_dict().items()}
+
+
+class StationAvailability(DbEntity, Extensions):  # type: ignore
     station_id = pony.orm.Required(int)
     stratum = pony.orm.Required(int)
     valid_at = pony.orm.Required(int, size=64)
@@ -77,7 +85,7 @@ class StationAvailability(DbEntity):  # type: ignore
     pony.orm.composite_index(station_id, stratum, valid_at, valid_to)
 
     def as_local(self) -> network.StationAvailability:
-        d = self.to_dict()
+        d = self.untracked_dict()
         d['valid_at'] = to_datetime(self.valid_at)
         d['valid_to'] = to_datetime_or_none(self.valid_to)
         return network.StationAvailability(**d)
@@ -96,7 +104,7 @@ class StationAvailability(DbEntity):  # type: ignore
             logger.info(f'pruned {before_prune - after_prune} StationAvailability ({after_prune} rows, {pages} pages)')
 
 
-class ReceivedPacket(DbEntity):  # type: ignore
+class ReceivedPacket(DbEntity, Extensions):  # type: ignore
     when = pony.orm.Required(int, size=64)
     agent = pony.orm.Required(str)
     ground_station = pony.orm.Required(int)
@@ -110,7 +118,7 @@ class ReceivedPacket(DbEntity):  # type: ignore
     pony.orm.PrimaryKey(when, frequency)
 
     def as_local(self) -> data.ReceivedPacket:
-        d = self.to_dict()
+        d = self.untracked_dict()
         d['when'] = to_datetime(self.when)
         return data.ReceivedPacket(**d)
 
@@ -132,7 +140,7 @@ class ReceivedPacket(DbEntity):  # type: ignore
 
 
 # Not currently used
-class FrequencyWatch(DbEntity):  # type: ignore
+class FrequencyWatch(DbEntity, Extensions):  # type: ignore
     sequence = pony.orm.PrimaryKey(int, auto=True)
     started = pony.orm.Required(int, size=64)
     ended = pony.orm.Optional(int, size=64)
@@ -142,10 +150,10 @@ class FrequencyWatch(DbEntity):  # type: ignore
     observer_id = pony.orm.Optional(str)
 
     def as_local(self) -> data.FrequencyWatch:
-        d = self.to_dict()
+        d = self.untracked_dict()
         d['started'] = to_datetime(self.started)
         d['ended'] = to_datetime_or_none(self.ended)
-        return data.FrequencyWatch(**self.to_dict())
+        return data.FrequencyWatch(**d)
 
     @classmethod
     @pony.orm.db_session(strict=True)
@@ -222,9 +230,9 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
         q = q.where(lambda a: a.valid_to is None or a.valid_to >= when)
         q = q.sort_by(pony.orm.desc(StationAvailability.stratum), pony.orm.desc(StationAvailability.valid_at))
         row = q.first()
-        # if not row:
-        #     logger.info(f'No availability for {station_id} at {when} ({at})... {row}')
-        return row.as_local() if row else None
+        local_row = row.as_local() if row else None
+        del q
+        return local_row
 
     @pony.orm.db_session(strict=True)
     def active(self, at: Optional[datetime.datetime] = None) -> Sequence[network.StationAvailability]:
@@ -242,10 +250,6 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
 
     def current_freqs(self) -> Sequence[int]:
         return list(itertools.chain(*[a.frequencies for a in self.current()]))
-
-    @pony.orm.db_session(strict=True)
-    def station(self, station_id: int, at: Optional[datetime.datetime] = None) -> Optional[network.StationAvailability]:
-        return self._for_station(station_id, at=at)
 
     def prune(self, _: Any = None) -> None:
         StationAvailability.prune()
@@ -273,10 +277,19 @@ class PacketWatcher(data.AbstractPacketWatcher):
             logger.info(f'bad packet? {exc}\n{packet_info.packet}')
         db.commit()
 
-    def recent_packets(cls, at: datetime.datetime) -> Sequence[ReceivedPacket]:
-        when = to_timestamp(at)
+    def recent_packets_list(cls, since: datetime.datetime) -> Sequence[ReceivedPacket]:
+        when = to_timestamp(since)
         q = pony.orm.select(r for r in ReceivedPacket).where(lambda r: r.when > when)
-        return q[:]
+        results = q[:]
+        del q
+        return results
+
+    @contextlib.contextmanager
+    def recent_packets(cls, since: datetime.datetime) -> Iterable[ReceivedPacket]:
+        when = to_timestamp(since)
+        q = pony.orm.select(r for r in ReceivedPacket).where(lambda r: r.when > when)  # type: ignore[attr-defined]
+        yield q
+        del q
 
     def prune(self) -> None:
         ReceivedPacket.prune(util.now() - datetime.timedelta(days=1))
@@ -293,65 +306,67 @@ class PacketWatcher(data.AbstractPacketWatcher):
             await self.periodic_task
             self.periodic_task = None
 
+    def binned_recent_packets(self, since: datetime.datetime, bin_size: int) -> Iterable[tuple[int, ReceivedPacket]]:
+        when_ts = to_timestamp(since)
+        recent_packets: Iterable[ReceivedPacket]
+        with self.recent_packets(since) as recent_packets:
+            for packet in recent_packets:  # type: ignore[attr-defined]
+                bin_number = int((when_ts - packet.when) // TS_FACTOR // bin_size)
+                yield bin_number, packet
+
     @pony.orm.db_session(strict=True)
-    def packets_by_frequency(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+    def packets_by_frequency(self, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             data[packet.frequency][bin_number] += 1
         return data
 
     @pony.orm.db_session(strict=True)
-    def packets_by_agent(cls, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
+    def packets_by_agent(self, bin_size: int, num_bins: int) -> Mapping[str, Sequence[int]]:
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             data[packet.agent or 'unknown'][bin_number] += 1
         return data
 
     @pony.orm.db_session(strict=True)
-    def packets_by_station(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+    def packets_by_station(self, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             station = network.STATIONS[packet.frequency]
             data[station.station_id][bin_number] += 1
         return data
 
     @pony.orm.db_session(strict=True)
-    def packets_by_band(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+    def packets_by_band(self, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             data[packet.frequency // 1000][bin_number] += 1
         return data
 
     @pony.orm.db_session(strict=True)
     def packets_by_frequency_set(
-        cls, bin_size: int, num_bins: int, frequency_sets: dict[int, str]
+        self, bin_size: int, num_bins: int, frequency_sets: dict[int, str]
     ) -> Mapping[str, Sequence[int]]:
         data: dict[str, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             data[frequency_sets.get(packet.frequency, str(packet.frequency))][bin_number] += 1
         return data
 
     @pony.orm.db_session(strict=True)
-    def packets_by_receiver(cls, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
+    def packets_by_receiver(self, bin_size: int, num_bins: int) -> Mapping[int, Sequence[int]]:
         data: dict[int, list[int]] = collections.defaultdict(lambda: [0] * num_bins)
         total_seconds = bin_size * num_bins
         when = util.now() - datetime.timedelta(seconds=total_seconds)
-        for packet in cls.recent_packets(when):
-            bin_number = int((when - to_datetime(packet.when)).total_seconds() // bin_size)
+        for bin_number, packet in self.binned_recent_packets(when, bin_size):
             data[packet.receiver][bin_number] += 1
         return data
