@@ -6,6 +6,7 @@
 
 import asyncio
 import collections
+import functools
 import json
 import logging
 import pathlib
@@ -65,8 +66,13 @@ class RemoteBroker:
 
 
 class GenericRemoteEventDispatcher:
+
+    @functools.cache
+    def get_remote_handler(self, name: str) -> None | Callable:
+        return getattr(self, f'on_remote_{name.strip()}', None)
+
     def on_remote_event(self, message: Message) -> None:
-        handler = getattr(self, f'on_remote_{message.subject.strip()}', None)
+        handler = self.get_remote_handler(message.subject)
         if callable(handler):
             logger.debug(f'dispatching {message} via {handler}')
             handler(message)
@@ -144,7 +150,12 @@ class PeriodicTask():
         while self.enabled:
             if self.chatty:
                 logger.debug(f'{self} executing')
-            await self.execute()
+            try:
+                await self.execute()
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                logger.error(f'{self} encountered error {err}')
             await asyncio.sleep(self.period)
 
     def start(self) -> None:
@@ -167,7 +178,10 @@ class PeriodicCallback(PeriodicTask):
     async def execute(self) -> None:
         for callback in self.callbacks:
             if callable(callback):
-                callback()
+                try:
+                    callback()
+                except Exception as err:
+                    logger.error(f'{self} {callback} encountered error {err}')
 
     def __str__(self) -> str:
         return f'<PeriodicCallback@{self.period} [{";".join(str(c) for c in self.callbacks)}]>'
