@@ -16,7 +16,7 @@ import hfdl_observer.env as env
 import hfdl_observer.util as util
 
 
-base_path: pathlib.Path = None  # type: ignore
+base_path: pathlib.Path = pathlib.Path(os.getcwd())
 registry: MutableMapping[str, dict] = {}
 
 

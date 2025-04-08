@@ -60,7 +60,7 @@ class Dumphfdl(BaseDecoder):
 
     def commandline(self) -> list[str]:
         if not self.channel or not self.channel.frequencies:
-            logger.warning(f'{self} requested an empty command line')
+            logger.info(f'{self} requested an empty command line')
             return []
         cmd = [str(env.as_executable_path(self.config['decoder_path']))]
         cmd.extend(self.listen_args())
@@ -308,14 +308,14 @@ class RX888mk2Decoder(SoapySDRDecoder):
             if shoulders[0] <= freq <= shoulders[1]:
                 logger.debug(f'{freq} is within shoulders')
             else:
-                logger.warning(f'{freq} is not within {shoulders} and reception may be impaired')
+                logger.info(f'{freq} is not within {shoulders} and reception may be impaired')
         args.append('--centerfreq')
         args.append(str(actual_center))
         return args
 
     def commandline(self) -> list[str]:
         cmd = super().commandline()
-        logger.info(f'COMMAND: {cmd}')
+        logger.debug(f'COMMAND: {cmd}')
         return cmd
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:

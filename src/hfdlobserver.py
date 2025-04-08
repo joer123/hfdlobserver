@@ -126,7 +126,7 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         return outstanding
 
     async def stop(self) -> None:
-        logger.warning(f'{self} stopped')
+        logger.info(f'{self} stopped')
         self.hfdl_listener.stop()
         await asyncio.gather(*self.outstanding_awaitables(), return_exceptions=True)
         logger.info(f'{self} tasks halted')

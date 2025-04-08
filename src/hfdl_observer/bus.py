@@ -260,7 +260,7 @@ class StreamWatcher(RoutineTask, LocalPublisher):
                 await asyncio.sleep(0)
                 if not self.enabled:
                     break
-        logger.info(f'finished watching {self.stream}')
+        logger.debug(f'finished watching {self.stream}')
 
 
 class JSONStreamWatcher(StreamWatcher, JSONWatcher):

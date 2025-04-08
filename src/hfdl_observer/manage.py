@@ -13,7 +13,6 @@ import itertools
 import json
 import logging
 import uuid
-import weakref
 
 from typing import Any, Awaitable, Callable, Coroutine, Optional
 
@@ -159,7 +158,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         payload: dict = message.payload
         frequencies: list[int] = payload["frequencies"]
         if self.uuid == payload['uuid']:
-            logger.info(f'{self} remote now listening to {len(frequencies)} frequencies')
+            logger.info(f'{self} (remote) now listening to {len(frequencies)} frequencies')
             self.keepalive()
             self.channel = self.observing_channel_for(frequencies)
             for frequency in frequencies or []:
@@ -326,7 +325,7 @@ class UniformOrchestrator(AbstractOrchestrator):
                     else:
                         receiver_freqs = []
                     receiver.listen(channel.frequencies)
-                    logger.info(f'assigned {channel.frequencies} to {receiver.name} (was {receiver_freqs})')
+                    logger.debug(f'assigned {channel.frequencies} to {receiver.name} (was {receiver_freqs})')
                     self.reaper.add_channel(channel)
                     available.remove(receiver)
                     break

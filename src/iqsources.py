@@ -56,7 +56,7 @@ class KiwiClient:
         args = [
             str(env.as_executable_path(self.config['recorder_path'])),
             '--nc',
-            '--log', 'info',
+            '--log', 'warn',
             '-s', self.config['address'],
             '-p', str(self.config['port']),
             '-f', str(self.channel.center_khz),

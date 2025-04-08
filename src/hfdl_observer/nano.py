@@ -6,7 +6,7 @@ import threading
 
 from typing import Any, Callable, Optional
 
-import pynng
+import pynng  # type: ignore[import-not-found]
 
 import hfdl_observer.util as util
 

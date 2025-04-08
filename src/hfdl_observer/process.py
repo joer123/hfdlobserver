@@ -163,14 +163,14 @@ class Command:
             try:
                 async with util.async_reader(process.stderr) as stderr_reader:
                     async with self.watch_stderr(process.pid, stderr_reader) as stderr_task:
-                        self.process_logger.info(f'launched {stderr_task}')
+                        self.process_logger.debug(f'launched {stderr_task}')
                         retcode = await util.in_thread(process.wait)
                 if retcode not in self.valid_return_codes:
                     self.process_logger.debug(f'exited with {retcode}')
                 else:
                     self.process_logger.info(f'exited with {retcode}')
             except asyncio.CancelledError:
-                self.process_logger.info("mapping cancellation to exit")
+                self.process_logger.debug("mapping cancellation to exit")
                 pass
             except Exception as e:
                 self.process_logger.info(f'process {process.pid} aborted.', exc_info=e)
@@ -289,7 +289,7 @@ class Command:
                     await self.stop()
                 else:
                     raise
-        (stream_logger or self.logger).info(f'finished watching {stream}')
+        (stream_logger or self.logger).debug(f'finished watching {stream}')
 
     def reset_recoverable_error_count(self, *_: Any) -> None:
         self.recoverable_error_count = 0
@@ -342,7 +342,7 @@ class ProcessHarness:
             self.logger.info(f'settling for {self.settle_time} seconds')
             await asyncio.sleep(self.settle_time)
         if self.backoff_time:
-            self.logger.info(f'additional (one-time) backoff {self.backoff_time} seconds')
+            self.logger.info(f'additional backoff: {self.backoff_time} seconds')
             await asyncio.sleep(self.backoff_time)
             self.backoff_time = 0
 

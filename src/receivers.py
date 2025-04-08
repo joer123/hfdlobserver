@@ -178,7 +178,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
             self.logger.info(f'already listening to {frequencies}')
             self.publish_listening()
             return
-        self.logger.info(f'switching to {frequencies} from {self.frequencies}')
+        self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
         await self.stop()
         self.frequencies = frequencies
         self.channel = self.observing_channel_for(frequencies)
@@ -193,7 +193,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
                         await asyncio.sleep(0)
             finally:
                 if _state and _state != 'done':
-                    self.logger.info(f'{self.name} finished listening lifecycle with {_state}')
+                    self.logger.debug(f'{self.name} finished listening lifecycle with {_state}')
                 self.clear()
                 await asyncio.sleep(0)
         else:
@@ -319,10 +319,10 @@ class Web888ExecReceiver(Web888Receiver):
             try:
                 client_result, decoder_result = await asyncio.gather(*awaitables, return_exceptions=True)
                 if isinstance(client_result, Exception) and decoder.is_running():
-                    logger.error(f'{self} client encountered an error', exc_info=client_result)
+                    logger.warning(f'{self} client encountered an error', exc_info=client_result)
                     await decoder.stop()
                 if isinstance(decoder_result, Exception) and client.is_running():
-                    logger.error(f'{self} decoder encountered an error', exc_info=decoder_result)
+                    logger.warning(f'{self} decoder encountered an error', exc_info=decoder_result)
                     await client.stop()
             except asyncio.CancelledError:
                 if decoder.is_running():
@@ -409,7 +409,7 @@ class DirectReceiver(LocalReceiver):
             if not isinstance(self.decoder, decoders.DirectDecoder):
                 raise ValueError(f'{self.decoder} is not an expected Decoder')
             self.observable_channel_widths = self.decoder.observable_channel_widths()
-            logger.info(f'observable channel widths {self.observable_channel_widths}')
+            logger.info(f'{self.name} observable channel widths {self.observable_channel_widths}')
 
     def is_running(self) -> bool:
         return self.decoder is not None and self.decoder.is_running()
