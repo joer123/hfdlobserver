@@ -12,9 +12,10 @@ import functools
 import itertools
 import logging
 
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Generator, Iterable, Mapping, Optional, Sequence, Type
 
-import pony.orm
+import pony.orm  # type: ignore[import-not-found]
+import pony.orm.core  # type: ignore[import-not-found]
 
 import hfdl_observer.bus as bus
 import hfdl_observer.hfdl as hfdl
@@ -62,17 +63,25 @@ def pagesize() -> int:
 # allow inheriting a class from a variable. For Pyright this declaration
 # is enough misdirection for it not to complain, but MyPy needs an extra
 # `type: ignore` comment above each model declaration to work.
-DbEntity = db.Entity
+#  DbEntity = db.Entity
+# The more clever way to do this is to respecify the type of the db.Entity attribute. mypy behaves much better.
+DbEntity: Type[pony.orm.core.Entity] = db.Entity
+# However there are still a couple of snags. mypy won't see the `__iter__` injected by the metaclass EntityMeta,
+# but we could wrap those calls as `iter(MyEntity)`. That has a further snag, since the EntityIter class is not
+# self iterable. There are valid reasons for doing it that way, but since I know I'm not going to be doing nasty
+# things, I can patch the class to add the necessary dunder.
+pony.orm.core.EntityIter.__iter__ = lambda self: self
+# any now mypy is happy with no further ignores or other funkiness.
 
 
-class Extensions:
+class Untracked:
     to_dict: Callable[[], dict]
 
     def untracked_dict(self) -> dict:
         return {k: getattr(v, 'get_untracked', lambda: v)() for k, v in self.to_dict().items()}
 
 
-class StationAvailability(DbEntity, Extensions):  # type: ignore
+class StationAvailability(DbEntity, Untracked):
     station_id = pony.orm.Required(int)
     stratum = pony.orm.Required(int)
     valid_at = pony.orm.Required(int, size=64)
@@ -93,18 +102,18 @@ class StationAvailability(DbEntity, Extensions):  # type: ignore
     @classmethod
     @pony.orm.db_session(strict=True)
     def prune(cls) -> None:
-        before_prune = pony.orm.count(a for a in StationAvailability)
+        before_prune = pony.orm.count(a for a in iter(StationAvailability))
         horizon = to_timestamp(util.now() - datetime.timedelta(days=1))
-        pony.orm.delete(a for a in StationAvailability if a.valid_to is not None and a.valid_to < horizon)
-        pony.orm.delete(a for a in StationAvailability if a.valid_to is None and a.valid_at < horizon)
+        pony.orm.delete(a for a in iter(StationAvailability) if a.valid_to is not None and a.valid_to < horizon)
+        pony.orm.delete(a for a in iter(StationAvailability) if a.valid_to is None and a.valid_at < horizon)
         pages = int(db.execute("PRAGMA page_count;").fetchone()[0])
         # logger.debug(f'DB size is {pages * pagesize()}')
-        after_prune = pony.orm.count(a for a in StationAvailability)
+        after_prune = pony.orm.count(a for a in iter(StationAvailability))
         if after_prune < before_prune:
             logger.info(f'pruned {before_prune - after_prune} StationAvailability ({after_prune} rows, {pages} pages)')
 
 
-class ReceivedPacket(DbEntity, Extensions):  # type: ignore
+class ReceivedPacket(DbEntity, Untracked):
     when = pony.orm.Required(int, size=64)
     agent = pony.orm.Required(str)
     ground_station = pony.orm.Required(int)
@@ -126,13 +135,13 @@ class ReceivedPacket(DbEntity, Extensions):  # type: ignore
     @pony.orm.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         try:
-            before_prune = pony.orm.count(r for r in ReceivedPacket)
+            before_prune = pony.orm.count(r for r in iter(ReceivedPacket))
             horizon = to_timestamp(before)
             # initial = int(db.execute("PRAGMA page_count;").fetchone()[0])
-            pony.orm.delete(p for p in ReceivedPacket if p.when < horizon)
+            pony.orm.delete(p for p in iter(ReceivedPacket) if p.when < horizon)
             after = int(db.execute("PRAGMA page_count;").fetchone()[0])
             # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
-            after_prune = pony.orm.count(r for r in ReceivedPacket)
+            after_prune = pony.orm.count(r for r in iter(ReceivedPacket))
             if after_prune < before_prune:
                 logger.info(f'pruned {before_prune - after_prune} ReceivedPackets ({after_prune} rows, {after} pages)')
         except Exception as err:
@@ -140,7 +149,7 @@ class ReceivedPacket(DbEntity, Extensions):  # type: ignore
 
 
 # Not currently used
-class FrequencyWatch(DbEntity, Extensions):  # type: ignore
+class FrequencyWatch(DbEntity, Untracked):
     sequence = pony.orm.PrimaryKey(int, auto=True)
     started = pony.orm.Required(int, size=64)
     ended = pony.orm.Optional(int, size=64)
@@ -159,7 +168,7 @@ class FrequencyWatch(DbEntity, Extensions):  # type: ignore
     @pony.orm.db_session(strict=True)
     def prune(cls, before: datetime.datetime) -> None:
         horizon = to_timestamp(before)
-        pony.orm.delete(p for p in cls if p.ended < horizon)
+        pony.orm.delete(p for p in iter(cls) if p.ended < horizon)
 
 
 # after all entities have been created
@@ -223,7 +232,7 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
     ) -> Optional[network.StationAvailability]:
         when = to_timestamp(at or util.now())
         q = pony.orm.select(
-            a for a in StationAvailability
+            a for a in iter(StationAvailability)
             if a.station_id == station_id
         )
         q = q.where(lambda a: a.valid_at <= when)
@@ -246,7 +255,8 @@ class NetworkUpdater(network.AbstractNetworkUpdater):
 
     @pony.orm.db_session(strict=True)
     def current(self) -> Sequence[network.StationAvailability]:
-        return self.active()
+        active: list[network.StationAvailability] = self.active()
+        return active
 
     def current_freqs(self) -> Sequence[int]:
         return list(itertools.chain(*[a.frequencies for a in self.current()]))
@@ -279,15 +289,17 @@ class PacketWatcher(data.AbstractPacketWatcher):
 
     def recent_packets_list(cls, since: datetime.datetime) -> Sequence[ReceivedPacket]:
         when = to_timestamp(since)
-        q = pony.orm.select(r for r in ReceivedPacket).where(lambda r: r.when > when)
-        results = q[:]
+        q = pony.orm.select(r for r in iter(ReceivedPacket)).where(lambda r: r.when > when)
+        results: Sequence[ReceivedPacket] = q[:]
         del q
         return results
 
     @contextlib.contextmanager
-    def recent_packets(cls, since: datetime.datetime) -> Iterable[ReceivedPacket]:
+    # def recent_packets(cls, since: datetime.datetime) -> Iterable[ReceivedPacket]:
+    # That should be an acceptable type hint but mypy doesn't like it. The "correct" way for mypy follows
+    def recent_packets(cls, since: datetime.datetime) -> Generator[Iterable[ReceivedPacket], None, None]:
         when = to_timestamp(since)
-        q = pony.orm.select(r for r in ReceivedPacket).where(lambda r: r.when > when)  # type: ignore[attr-defined]
+        q = pony.orm.select(r for r in iter(ReceivedPacket)).where(lambda r: r.when > when)
         yield q
         del q
 
@@ -310,7 +322,7 @@ class PacketWatcher(data.AbstractPacketWatcher):
         when_ts = to_timestamp(since)
         recent_packets: Iterable[ReceivedPacket]
         with self.recent_packets(since) as recent_packets:
-            for packet in recent_packets:  # type: ignore[attr-defined]
+            for packet in recent_packets:
                 bin_number = int((when_ts - packet.when) // TS_FACTOR // bin_size)
                 yield bin_number, packet
 
