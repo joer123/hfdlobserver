@@ -147,7 +147,7 @@ class PeriodicTask():
     async def run(self) -> None:
         self.enabled = True
         self.prepare()
-        while self.enabled:
+        while self.enabled and not util.is_shutting_down():
             if self.chatty:
                 logger.debug(f'{self} executing')
             try:
@@ -166,7 +166,8 @@ class PeriodicTask():
         task = getattr(self, 'task')
         if task:
             self.enabled = False
-            await task
+            task.cancel()
+            # await task
 
 
 class PeriodicCallback(PeriodicTask):

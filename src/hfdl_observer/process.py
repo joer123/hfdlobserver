@@ -3,6 +3,7 @@
 # see LICENSE (or https://github.com/hfdl-observer/hfdlobserver888/blob/main/LICENSE) for terms of use.
 # TL;DR: BSD 3-clause
 #
+# flake8: noqa [W503]
 
 import asyncio
 import asyncio.subprocess
@@ -171,7 +172,6 @@ class Command:
                     self.process_logger.info(f'exited with {retcode}')
             except asyncio.CancelledError:
                 self.process_logger.debug("mapping cancellation to exit")
-                pass
             except Exception as e:
                 self.process_logger.info(f'process {process.pid} aborted.', exc_info=e)
                 raise
@@ -212,7 +212,7 @@ class Command:
             try:
                 pid = process.pid
                 try:
-                    logger.debug(f'signal {sig} to pid {pid}')
+                    logger.info(f'signal {sig} to pid {pid}')
                     # department of redundancy department
                     process.send_signal(sig)
                     os.kill(pid, sig)

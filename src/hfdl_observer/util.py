@@ -15,12 +15,17 @@ import logging
 import math
 import os
 import re
+import select
+import sys
+import termios
 import threading
 
 from typing import Any, AsyncGenerator, Callable, Coroutine, IO, Union
 
 logger = logging.getLogger(__name__)
 thread_local = threading.local()
+thread_local.shutdown_event = threading.Event()
+thread_local.loop = None
 
 
 def tobool(val: Union[bool, str, int]) -> bool:
@@ -170,6 +175,11 @@ def call_soon(fn: Callable, *args: Any) -> asyncio.Handle:
     return loop.call_soon(fn, *args)
 
 
+def call_soon_threadsafe(fn: Callable, *args: Any) -> asyncio.Handle:
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+    return loop.call_soon_threadsafe(fn, *args)
+
+
 def call_later(delay: float, fn: Callable, *args: Any) -> asyncio.TimerHandle:
     loop: asyncio.AbstractEventLoop = thread_local.loop
     return loop.call_later(delay, fn, *args)
@@ -210,6 +220,82 @@ class async_reader(contextlib.AbstractAsyncContextManager):
             self.transport.close()
 
 
+async def async_keystrokes() -> AsyncGenerator:
+    # This doesn't work well with rich. Rich's response to this seems to be "dunno, don't care".
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    def read_with_timeout() -> str | None:
+        if select.select([sys.stdin,], [], [], 5)[0]:
+            return sys.stdin.read(1)
+        return None
+
+    try:
+        term = termios.tcgetattr(fd)
+        # we can't use setraw, since it will mess up Rich
+        # tty.setraw(sys.stdin.fileno())
+        # term[0] &= ~(termios.IXON | termios.ICRNL)
+        term[3] &= ~(termios.ICANON | termios.ECHO | termios.IEXTEN | termios.IGNBRK | termios.BRKINT | termios.ISIG)
+        # term[3] |= 
+        termios.tcsetattr(fd, termios.TCSAFLUSH, term)
+        while not is_shutting_down():
+            key = await in_thread(read_with_timeout)
+            if key is None:
+                continue
+            if not key:
+                logger.debug("no more keystrokes")
+                break
+            if ord(key) in (3, 4):
+                logger.warning('break received')
+                thread_local.shutdown_event.set()
+                break
+                # os.kill(os.getpid(), signal.SIGINT)  # this requires a second ^C
+                # raise KeyboardInterrupt()  # this requires a second ^C
+            if key == "!":
+                logger.info("Peekaboo!")
+            yield key
+    except Exception as err:
+        logger.error('keyboard error?', exc_info=err)
+        raise err
+    finally:
+        logger.debug("keyboard loop finished")
+        termios.tcsetattr(fd, termios.TCSAFLUSH, old_settings)
+
+
+class AbstractKeyboard:
+    mappings: dict[str, Callable]
+
+    def __init__(self) -> None:
+        self.mappings = {}
+
+    def add_mapping(self, key: str, callback: Callable) -> None:
+        self.mappings[key] = callback
+
+    def remove_mapping(self, key: str) -> None:
+        del self.mappings[key]
+
+    def on_keystroke(self, key: str) -> None:
+        try:
+            callback = self.mappings[key]
+        except KeyError:
+            pass
+        else:
+            call_soon_threadsafe(callback, key)
+
+
+class AsyncKeyboard(AbstractKeyboard):
+    async def run(self) -> None:
+        keystrokes = async_keystrokes()
+        try:
+            async for key in keystrokes:
+                self.on_keystroke(key)
+        except Exception as err:
+            logger.error('AsyncKeyboard error', exc_info=err)
+
+
+Keyboard = AsyncKeyboard
+
+
 class aclosing(contextlib.AbstractAsyncContextManager):
     # version of contextlib.aclosing that tries to relinquish running state of generator before closing it.
     def __init__(self, thing: AsyncGenerator) -> None:
@@ -233,3 +319,8 @@ async def in_thread(func: Callable, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
 
     return await loop.run_in_executor(thread_local.executor, run)
+
+
+def is_shutting_down() -> bool:
+    shutting_down: bool = thread_local.shutdown_event.is_set()
+    return shutting_down

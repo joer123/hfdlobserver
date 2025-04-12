@@ -107,9 +107,9 @@ class ZeroSubscriber:
         self.socket.setsockopt(zmq.SUBSCRIBE, self.channel.encode())
 
         try:
-            while self.running and self.socket:
+            while self.running and self.socket and not util.is_shutting_down():
                 try:
-                    parts = await asyncio.wait_for(self.socket.recv_multipart(), 15)
+                    parts = await asyncio.wait_for(self.socket.recv_multipart(), 5)
                 except asyncio.TimeoutError:
                     continue
                 header, body = parts

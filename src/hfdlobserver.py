@@ -43,6 +43,12 @@ else:
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
 TRACEMALLOC = False
 
+try:
+    import sqlite3  # noqa: F401
+except ImportError:
+    logger.error('sqlite3 not found. You may need to run "extras/migrate-from-888.sh" or reinstall')
+    sys.exit(1)
+
 
 class HFDLObserverNode(receivers.ReceiverNode):
     def __init__(self, config: collections.abc.Mapping) -> None:
@@ -128,7 +134,12 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
     async def stop(self) -> None:
         logger.info(f'{self} stopped')
         self.hfdl_listener.stop()
-        await asyncio.gather(*self.outstanding_awaitables(), return_exceptions=True)
+        outstanding = self.outstanding_awaitables()
+        for o in outstanding:
+            logger.info(f'outstanding {o}')
+        for t in asyncio.all_tasks():
+            logger.info(f'task {t}')
+        await asyncio.gather(*outstanding, return_exceptions=True)
         logger.info(f'{self} tasks halted')
 
     def message_broker(self) -> bus.RemoteBroker:
@@ -139,9 +150,13 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         for line in str(table).split('\n'):
             logger.info(f'{line}')
 
-    def maybe_describe_receivers(self, *_: Any) -> None:
+    def maybe_describe_receivers(self, *_: Any, force: bool = False) -> None:
         current = list(r.describe() for r in self.local_receivers)
-        if self.previous_description != current:
+        local_names = set(r.name for r in self.local_receivers)
+        for proxy_name, proxy in self.proxies.items():
+            if proxy_name not in local_names:
+                current.append(proxy.describe())
+        if force or self.previous_description != current:
             for line in current:
                 logger.info(line)
             self.previous_description = current
@@ -162,8 +177,11 @@ async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> 
         logger.warning("tracemalloc on")
     count = 0
     observer.start()
-    while observer.running:
+    while observer.running and not util.is_shutting_down():
         await asyncio.sleep(1)
+        if util.is_shutting_down():
+            logger.info(f'{observer} will exit')
+            raise asyncio.CancelledError()
         count += 1
         if TRACEMALLOC and count > 300:
             count = 0
@@ -284,7 +302,15 @@ def command(
     global TRACEMALLOC
     TRACEMALLOC = trace
 
-    hfdl_observer.settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
+    settings_path = config or (pathlib.Path(__file__).parent.parent / 'settings.yaml')
+    try:
+        hfdl_observer.settings.load(settings_path)
+    except hfdl_observer.settings.DeprecatedSettingsError:
+        logger.error('A deprecated settings file is detected. It must be updated before you can continue.')
+        logger.error('If you have not customized the settings file yourself:')
+        logger.error('- run "hfdlobserver.sh configure" and')
+        logger.error(f'- copy the resulting file to {settings_path}.')
+        sys.exit(1)
     # old_settings.load(config or (pathlib.Path(__file__).parent.parent / 'settings.yaml'))
     handler = logging.handlers.TimedRotatingFileHandler(log, when='d', interval=1) if log else None
     if handler is not None:
@@ -300,7 +326,7 @@ def command(
             import cui
             cui.screen(handler, debug)
     except Exception as exc:
-        # will this catch the annoying libzmq assertion failures?
+        # will this catch the annoying libzmq assertion failures? nope.
         print(f'exiting due to exception: {exc}')
         print(str(exc.__traceback__))
 

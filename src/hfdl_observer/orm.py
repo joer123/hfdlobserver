@@ -110,7 +110,7 @@ class StationAvailability(DbEntity, Untracked):
         # logger.debug(f'DB size is {pages * pagesize()}')
         after_prune = pony.orm.count(a for a in iter(StationAvailability))
         if after_prune < before_prune:
-            logger.info(f'pruned {before_prune - after_prune} StationAvailability ({after_prune} rows, {pages} pages)')
+            logger.info(f'pruned {before_prune - after_prune} StationAvailability ({after_prune} records, {pages} pages)')
 
 
 class ReceivedPacket(DbEntity, Untracked):
@@ -143,7 +143,7 @@ class ReceivedPacket(DbEntity, Untracked):
             # logger.debug(f'DB size was {initial * pagesize()}, now {after * pagesize()}')
             after_prune = pony.orm.count(r for r in iter(ReceivedPacket))
             if after_prune < before_prune:
-                logger.info(f'pruned {before_prune - after_prune} ReceivedPackets ({after_prune} rows, {after} pages)')
+                logger.info(f'pruned {before_prune - after_prune} ReceivedPackets ({after_prune} records, {after} pages)')
         except Exception as err:
             logger.error('cannot prune', exc_info=err)
 

@@ -104,7 +104,7 @@ class HFDLListener(hfdl_observer.bus.LocalPublisher):
             local_addr=(self.settings['address'], self.settings['port']),
         )
         try:
-            while self.running:
+            while self.running and not util.is_shutting_down():
                 await asyncio.sleep(1)
         finally:
             try:

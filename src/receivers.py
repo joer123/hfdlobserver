@@ -333,7 +333,7 @@ class Web888ExecReceiver(Web888Receiver):
                 logger.error(f'{self} encountered an error', exc_info=err)
 
     async def stop(self) -> None:
-        self.logger.debug('Stopping')
+        self.logger.info(f'Stopping {self}')
         client = self.client
         decoder = self.decoder
         if decoder is not None:

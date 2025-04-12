@@ -104,6 +104,10 @@ def chained(key: str, *configs: MutableMapping) -> MutableMapping:
         return {}
 
 
+class DeprecatedSettingsError(Exception):
+    pass
+
+
 def load(filepath: Union[str, pathlib.Path]) -> MutableMapping:
     path = pathlib.Path(filepath)
     if not path.is_absolute():
@@ -115,6 +119,8 @@ def load(filepath: Union[str, pathlib.Path]) -> MutableMapping:
 
     global registry
     registry = yaml.safe_load(path.read_text())
+    if 'config' in registry:
+        raise DeprecatedSettingsError()
     for parent_key in ['observer', 'node']:
         parent = registry.get(parent_key, {})
         if 'local_receivers' in parent:
@@ -168,7 +174,8 @@ defaults: dict[str, Any] = {
             "show_all_active": False,
             "show_active_line": True,
             "show_confidence": True,
-            "show_targetting": False
+            "show_targetting": False,
+            "flexible_width": False,
         }
     },
     "node": {

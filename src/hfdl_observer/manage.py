@@ -202,6 +202,15 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
     def recently_alive(self) -> bool:
         return self.pings_sent <= 3
 
+    def describe(self) -> str:
+        if self.channel and self.channel.frequencies:
+            middle = f' @{(self.channel.center_khz)}'
+            freqs = len(self.channel.frequencies)
+        else:
+            middle = ''
+            freqs = 0
+        return f'{self.name} via {self.uuid} on {freqs} freqs{middle}'
+
 
 class AbstractOrchestrator(bus.LocalPublisher, data.ChannelObserver):
     ranked_station_ids: list[int]
@@ -409,7 +418,7 @@ class Reaper(bus.LocalPublisher):
         self.last_seen = {}
 
     async def run(self) -> None:
-        while True:
+        while not util.is_shutting_down():
             await asyncio.sleep(59)
 
     @functools.cached_property
@@ -497,6 +506,8 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
             logger.debug(f'not orchestrating... {self.orchestration_task}')
 
     def orchestrate(self) -> None:
+        if util.is_shutting_down():
+            return
         self.last_orchestrated = util.now()
         self.orchestration_task = None
         targetted_freqs = network.STATIONS.active()
