@@ -234,9 +234,7 @@ async def async_keystrokes(pacing: float = 0) -> AsyncGenerator:
         term = termios.tcgetattr(fd)
         # we can't use setraw, since it will mess up Rich
         # tty.setraw(sys.stdin.fileno())
-        # term[0] &= ~(termios.IXON | termios.ICRNL)
         term[3] &= ~(termios.ICANON | termios.ECHO | termios.IEXTEN | termios.IGNBRK | termios.BRKINT | termios.ISIG)
-        # term[3] |= 
         termios.tcsetattr(fd, termios.TCSAFLUSH, term)
         pacing_delta = datetime.timedelta(seconds=pacing)
         last_keystroke: datetime.datetime | None = None
@@ -244,22 +242,18 @@ async def async_keystrokes(pacing: float = 0) -> AsyncGenerator:
             key = await in_thread(read_with_timeout)
             if key is None:
                 continue
+            if not key:
+                logger.debug("no more keystrokes")
+                break
+            if ord(key) in (3, 4):  # ^C, ^D
+                logger.warning('break received')
+                thread_local.shutdown_event.set()
+                break
             if pacing > 0:
                 when = now()
                 if last_keystroke and when - last_keystroke < pacing_delta:
                     continue
                 last_keystroke = when
-            if not key:
-                logger.debug("no more keystrokes")
-                break
-            if ord(key) in (3, 4):
-                logger.warning('break received')
-                thread_local.shutdown_event.set()
-                break
-                # os.kill(os.getpid(), signal.SIGINT)  # this requires a second ^C
-                # raise KeyboardInterrupt()  # this requires a second ^C
-            if key == "!":
-                logger.info("Peekaboo!")
             yield key
     except Exception as err:
         logger.error('keyboard error?', exc_info=err)
