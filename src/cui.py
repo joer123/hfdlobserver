@@ -150,6 +150,8 @@ class ObserverDisplay:
         keyboard.add_mapping('=', self.larger_bins)
         keyboard.add_mapping('q', exit)
         keyboard.add_mapping('Q', exit)
+        for k, m in enumerate(self.heatmap.all_modes.keys()):
+            keyboard.add_mapping(str(k+1), functools.partial(self.heatmap.select_display_mode, m))
         return keyboard
 
     def update_status(self) -> None:
@@ -650,7 +652,7 @@ class HeatMap:
         self.bin_size = min(3600, max(60, int(bin_size)))
         self.maybe_render()
 
-    def select_display_mode(self, mode: str) -> None:
+    def select_display_mode(self, mode: str, *_: Any) -> None:
         self.current_mode = mode
         try:
             self.data_source = self.all_modes[mode]
