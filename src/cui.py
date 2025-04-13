@@ -141,6 +141,19 @@ class ObserverDisplay:
         )
         self.totals = table
 
+    def keyboard_help(self) -> str:
+        parts = [
+            'Keyboard Commands',
+            '[,] - previous mode',
+            '[.] - next mode',
+            '[-] - bin size -60s',
+            '[+] - bin size +60s',
+        ]
+        for k, m in enumerate(self.heatmap.all_modes.keys()):
+            parts.append(f'[{k+1}] - {m} mode')
+        parts.append('[h] - this help')
+        return '\n'.join(parts)
+
     def setup_keyboard(self, keyboard: util.Keyboard) -> util.Keyboard:
         keyboard.add_mapping('.', self.next_heatmap_mode)
         keyboard.add_mapping(',', self.previous_heatmap_mode)
@@ -150,6 +163,8 @@ class ObserverDisplay:
         keyboard.add_mapping('=', self.larger_bins)
         keyboard.add_mapping('q', exit)
         keyboard.add_mapping('Q', exit)
+        keyboard.add_mapping('h', lambda _: logger.info(self.keyboard_help()))
+        keyboard.add_mapping('H', lambda _: logger.info(self.keyboard_help()))
         for k, m in enumerate(self.heatmap.all_modes.keys()):
             keyboard.add_mapping(str(k+1), functools.partial(self.heatmap.select_display_mode, m))
         return keyboard
