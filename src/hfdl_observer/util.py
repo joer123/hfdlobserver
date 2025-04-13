@@ -220,7 +220,7 @@ class async_reader(contextlib.AbstractAsyncContextManager):
             self.transport.close()
 
 
-async def async_keystrokes() -> AsyncGenerator:
+async def async_keystrokes(pacing: float = 0) -> AsyncGenerator:
     # This doesn't work well with rich. Rich's response to this seems to be "dunno, don't care".
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -238,10 +238,17 @@ async def async_keystrokes() -> AsyncGenerator:
         term[3] &= ~(termios.ICANON | termios.ECHO | termios.IEXTEN | termios.IGNBRK | termios.BRKINT | termios.ISIG)
         # term[3] |= 
         termios.tcsetattr(fd, termios.TCSAFLUSH, term)
+        pacing_delta = datetime.timedelta(seconds=pacing)
+        last_keystroke: datetime.datetime | None = None
         while not is_shutting_down():
             key = await in_thread(read_with_timeout)
             if key is None:
                 continue
+            if pacing > 0:
+                when = now()
+                if last_keystroke and when - last_keystroke < pacing_delta:
+                    continue
+                last_keystroke = when
             if not key:
                 logger.debug("no more keystrokes")
                 break
@@ -284,8 +291,12 @@ class AbstractKeyboard:
 
 
 class AsyncKeyboard(AbstractKeyboard):
+    def __init__(self, pacing: float = 0) -> None:
+        super().__init__()
+        self.pacing = pacing
+
     async def run(self) -> None:
-        keystrokes = async_keystrokes()
+        keystrokes = async_keystrokes(self.pacing)
         try:
             async for key in keystrokes:
                 self.on_keystroke(key)

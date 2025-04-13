@@ -144,13 +144,13 @@ class ObserverDisplay:
     def keyboard_help(self) -> str:
         parts = [
             'Keyboard Commands',
-            '[,] - previous mode',
-            '[.] - next mode',
+            '[,] - previous display mode',
+            '[.] - next display mode',
             '[-] - bin size -60s',
             '[+] - bin size +60s',
         ]
         for k, m in enumerate(self.heatmap.all_modes.keys()):
-            parts.append(f'[{k+1}] - {m} mode')
+            parts.append(f'[{k+1}] - {m} display')
         parts.append('[h] - this help')
         return '\n'.join(parts)
 
@@ -903,7 +903,7 @@ def screen(loghandler: Optional[logging.Handler], debug: bool = True) -> None:
     )
     heatmap = HeatMap(cui_settings['ticker'])
     cumulative_line = CumulativeLine()
-    keyboard = util.Keyboard()
+    keyboard = util.Keyboard(1.0)
 
     forecaster = bus.RemoteURLRefresher('https://services.swpc.noaa.gov/products/noaa-scales.json', 617)
 
