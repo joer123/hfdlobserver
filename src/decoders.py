@@ -96,8 +96,8 @@ class Dumphfdl(BaseDecoder):
             '--output', f'decoded:json:{self.listener.proto}:address={self.listener.address},port={self.listener.port}'
         ])
 
-        # If we have a station ID, send to airframes (unless it's a private station ID starting with '*')
-        if self.station_id and not self.station_id.startswith('*'):
+        # If we have a station ID, send to airframes if that is configured
+        if self.station_id and self.config.get('airframes_enabled', True):
             cmd.extend(['--output', 'decoded:json:tcp:address=feed.airframes.io,port=5556',])
 
         # add any other configured outputs, such as for acarshub
