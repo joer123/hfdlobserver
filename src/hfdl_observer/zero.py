@@ -109,7 +109,11 @@ class ZeroSubscriber:
         try:
             while self.running and self.socket and not util.is_shutting_down():
                 try:
-                    parts = await asyncio.wait_for(self.socket.recv_multipart(), 5)
+                    events = await self.socket.poll(timeout=5)
+                    if events:
+                        parts = await self.socket.recv_multipart()
+                    else:
+                        continue
                 except asyncio.TimeoutError:
                     continue
                 header, body = parts
@@ -127,9 +131,7 @@ class ZeroSubscriber:
             pass
         finally:
             logger.debug(f'no longer subscribed to {self.url}/{self.channel}')
-            if self.socket:
-                self.socket.close(0)
-                self.socket = None
+            util.schedule(self.stop())
 
     async def stop(self) -> None:
         self._stop()
@@ -140,6 +142,9 @@ class ZeroSubscriber:
             logger.warning(f'will close socket for {self}')
             self.socket.close(0)
             self.socket = None
+
+    def __del__(self) -> None:
+        self._stop()
 
 
 class ZeroPublisher:
