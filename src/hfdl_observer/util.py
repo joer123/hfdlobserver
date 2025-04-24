@@ -50,6 +50,25 @@ def datetime_to_timestamp(when: datetime.datetime) -> float:
     return when.timestamp()
 
 
+HFDL_FRAME_TIME = 32
+
+
+def pseudoframe(when: datetime.datetime) -> int:
+    return int(datetime_to_timestamp(when) // HFDL_FRAME_TIME)
+
+
+def pseudoframe_timestamp(when: datetime.datetime) -> int:
+    return pseudoframe(when) * HFDL_FRAME_TIME
+
+
+def pseudoframe_from_timestamp(when: int) -> int:
+    return int(when // HFDL_FRAME_TIME)
+
+
+def timestamp_from_pseudoframe(when: int) -> int:
+    return when * HFDL_FRAME_TIME
+
+
 def deserialise_station_table(station_table: str) -> dict:
     # station table is a custom(?) "conf" format. Almost, but not quite, JSON.
     # sed -e 's/(/[/g' -e s'/)/]/g' -e 's/=/:/g' -e 's/;/,/g' -e 's/^\s*\([a-z]\+\) /"\1"/' >> ~/gs.json
@@ -110,8 +129,8 @@ class Pipe:
 
     def __init__(self) -> None:
         self.read, self.write = os.pipe()
-        os.set_inheritable(self.read, True)
-        os.set_inheritable(self.write, True)
+        # os.set_inheritable(self.read, True)
+        # os.set_inheritable(self.write, True)
 
     def close_read(self) -> None:
         try:
