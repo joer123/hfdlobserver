@@ -107,10 +107,10 @@ class ZeroSubscriber:
         self.socket.setsockopt(zmq.SUBSCRIBE, self.channel.encode())
 
         try:
-            while self.running and self.socket and not util.is_shutting_down():
+            while self.running and self.socket and not self.socket.closed and not util.is_shutting_down():
                 try:
                     events = await self.socket.poll(timeout=5)
-                    if events:
+                    if events and self.running:
                         parts = await self.socket.recv_multipart()
                     else:
                         continue
@@ -138,8 +138,9 @@ class ZeroSubscriber:
 
     def _stop(self) -> None:
         self.running = False
-        if self.socket is not None:
+        if self.socket is not None and not self.socket.closed:
             logger.warning(f'will close socket for {self}')
+            self.socket.disconnect(self.url)
             self.socket.close(0)
             self.socket = None
 
