@@ -116,7 +116,7 @@ class Command:
             yield CommandState('preparing')
             self.logger.debug('gathering options')
             exec_args: dict[str, Any] = {
-                'stderr': asyncio.subprocess.PIPE
+                'stderr': subprocess.PIPE
             }
             exec_args.update(self.execution_arguments)
             shell_cmd = shlex.join(cmd)
@@ -162,7 +162,7 @@ class Command:
             yield CommandState('running', process.pid, process=process)
 
             try:
-                async with util.async_reader(process.stderr) as stderr_reader:
+                async with util.async_reader(process.stderr, close_on_exit=False) as stderr_reader:
                     async with self.watch_stderr(process.pid, stderr_reader) as stderr_task:
                         self.process_logger.debug(f'launched {stderr_task}')
                         retcode = await util.in_thread(process.wait)

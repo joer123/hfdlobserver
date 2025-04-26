@@ -66,9 +66,6 @@ class HFDLObserverNode(receivers.ReceiverNode):
         logger.error(f'Bailing due to error on receiver {receiver}: {error}')
         self.running = False
 
-    def message_broker(self) -> bus.RemoteBroker:
-        return bus.REMOTE_BROKER
-
     async def shutdown(self) -> None:
         awaitables = [receiver.stop() for receiver in self.local_receivers]
         await asyncio.gather(*awaitables, return_exceptions=True)
@@ -86,9 +83,9 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         self.packet_watcher = orm.PacketWatcher()
         hfdl_observer.data.PACKET_WATCHER = self.packet_watcher
         self.network_overview = manage.NetworkOverview(config['tracker'], network.UPDATER)
-        self.network_overview.subscribe('state', network.UPDATER.prune)
-        self.network_overview.subscribe('frequencies', self.on_frequencies)
-        self.subscribe('orchestrated', self.maybe_describe_receivers)
+        self.network_overview.watch_event('state', network.UPDATER.prune)
+        self.network_overview.watch_event('frequencies', self.on_frequencies)
+        self.watch_event('orchestrated', self.maybe_describe_receivers)
 
         self.hfdl_listener = hfdl_observer.listeners.HFDLListener(config.get('hfdl_listener', {}))
         self.hfdl_consumers = [
@@ -107,7 +104,7 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
             self.build_local_receiver(receiver_config)
 
     def on_hfdl(self, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
-        self.publish('packet', packet)
+        self.notify_event('packet', packet)
 
     def on_fatal_error(self, data: tuple[str, str]) -> None:
         receiver, error = data
@@ -142,11 +139,12 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         await asyncio.gather(*outstanding, return_exceptions=True)
         logger.info(f'{self} tasks halted')
 
-    def message_broker(self) -> bus.RemoteBroker:
-        return bus.REMOTE_BROKER
-
     def ministats(self, _: Any) -> None:
-        table = hfdl_observer.heat.TableByFrequency(60, 10)
+        util.schedule(self.aministats())
+
+    async def aministats(self) -> None:
+        table = hfdl_observer.heat.TableByFrequency()
+        await table.populate(60, 10)
         for line in str(table).split('\n'):
             logger.info(f'{line}')
 
@@ -165,6 +163,9 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         awaitables = [receiver.stop() for receiver in self.local_receivers]
         await asyncio.gather(*awaitables, return_exceptions=True)
         self.local_receivers = []
+
+    def is_receiver_managed(self, name: str) -> bool:
+        return receivers.ReceiverNode.is_receiver_managed(self, name)
 
 
 async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> None:
@@ -224,17 +225,19 @@ def observe(
             util.thread_local.runner = runner
 
             if as_controller:
+                local_broker = bus.LocalBroker()
+                bus.LOCAL_BROKER = local_broker
                 message_broker = zero.ZeroBroker(**broker_config)
                 message_broker.start()  # daemon thread, not async.
                 network.UPDATER = orm.NetworkUpdater()
                 observer = HFDLObserverController(settings)
                 cumulative = network.CumulativePacketStats()
-                observer.subscribe('packet', cumulative.on_hfdl)
+                observer.watch_event('packet', cumulative.on_hfdl)
                 if on_observer:
                     on_observer(observer, cumulative)
                 else:
                     # initialize headless
-                    observer.network_overview.subscribe('state', observer.ministats)
+                    observer.network_overview.watch_event('state', observer.ministats)
             else:  # just a node for receivers.
                 observer = HFDLObserverNode(settings)
             try:

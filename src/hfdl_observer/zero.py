@@ -5,12 +5,11 @@
 #
 
 import asyncio
-import dataclasses
 import json
 import logging
 import threading
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import zmq
 import zmq.asyncio
@@ -26,6 +25,9 @@ def get_thread_context() -> Context:
         context = util.thread_local.zmq_context = Context.instance()
         context.setsockopt(zmq.LINGER, 0)
     return util.thread_local.zmq_context  # type: ignore
+
+
+Message = util.Message
 
 
 class ZeroBroker:
@@ -62,40 +64,17 @@ class ZeroBroker:
             self.thread.start()
 
 
-@dataclasses.dataclass
-class Message:
-    target: str
-    subject: str
-    payload: Any
-
-    def __str__(self) -> str:
-        body: str
-        if isinstance(self.payload, str):
-            body = self.payload
-        else:
-            body = self.payload.__class__.__name__
-            if hasattr(self.payload, '__len__'):
-                body = f'{body} l={len(self.payload)}'
-        return f'<Message: t={self.target} s={self.subject} b={body}>'
-
-
-class ZeroSubscriber:
+class ZeroSubscriber(util.Subscriber):
     url: str
     channel: str
-    callbacks: list[tuple[Optional[Callable[[Message], bool]], Callable[[Message], None]]]
     context: Context
     socket: Optional[zmq.Socket] = None
 
     def __init__(self, url: str, channel: str, context: Optional[zmq.asyncio.Context] = None):
+        util.Subscriber.__init__(self)
         self.context = get_thread_context()
-        self.callbacks = []
         self.channel = channel
         self.url = url
-
-    def add_callback(
-        self, callback: Callable[[Message], None], filter: Optional[Callable[[Message], bool]] = None
-    ) -> None:
-        self.callbacks.append((filter, callback))
 
     async def run(self) -> None:
         if self.socket:
@@ -109,7 +88,7 @@ class ZeroSubscriber:
         try:
             while self.running and self.socket and not self.socket.closed and not util.is_shutting_down():
                 try:
-                    events = await self.socket.poll(timeout=5)
+                    events = await self.socket.poll(timeout=5_000)  # millis
                     if events and self.running:
                         parts = await self.socket.recv_multipart()
                     else:
@@ -120,28 +99,19 @@ class ZeroSubscriber:
                 payload = json.loads(body.decode())
                 target, subject = header.decode().split('|', 1)
                 message = Message(target=target, subject=subject, payload=payload)
-                logged = False
-                for filter, callback in self.callbacks:
-                    if not filter or filter(message):
-                        if not logged:
-                            # logger.debug(f'accepted {message}')
-                            logged = True
-                        util.call_soon(callback, message)
+                self.receive(message)
         except asyncio.CancelledError:
             pass
         finally:
             logger.debug(f'no longer subscribed to {self.url}/{self.channel}')
             util.schedule(self.stop())
 
-    async def stop(self) -> None:
-        self._stop()
-
     def _stop(self) -> None:
         self.running = False
         if self.socket is not None and not self.socket.closed:
             logger.warning(f'will close socket for {self}')
             self.socket.disconnect(self.url)
-            self.socket.close(0)
+            # self.socket.close(0)
             self.socket = None
 
     def __del__(self) -> None:

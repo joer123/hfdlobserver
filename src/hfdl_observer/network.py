@@ -4,6 +4,7 @@
 # TL;DR: BSD 3-clause
 #
 
+import asyncio
 import dataclasses
 import datetime
 import functools
@@ -57,11 +58,6 @@ STATION_ABBREVIATIONS = {
 
 
 PosixTimestamp = int
-HFDL_FRAME_TIME = 32
-
-
-def pseudoframe_timestamp(when: datetime.datetime) -> int:
-    return int(util.datetime_to_timestamp(when) // HFDL_FRAME_TIME) * HFDL_FRAME_TIME
 
 
 @dataclasses.dataclass
@@ -100,11 +96,12 @@ class Station:
 class StationAvailability:
     station_id: int
     stratum: int
-    valid_at: datetime.datetime
+    when: datetime.datetime
     frequencies: list[int]
     agent: str
-    from_station: Optional[int]
-    valid_to: Optional[datetime.datetime] = None
+    valid_at_frame: int
+    from_station: Optional[int] = None
+    valid_to_frame: Optional[int] = None
 
     def as_station(self) -> Station:
         base = STATIONS[self.station_id]
@@ -119,38 +116,43 @@ class StationAvailability:
 
 
 # protocol, really.
-class AbstractNetworkUpdater(bus.LocalPublisher):
-    def current(self) -> Sequence[StationAvailability]:
+class AbstractNetworkUpdater(bus.EventNotifier):
+    async def current(self) -> Sequence[StationAvailability]:
         raise NotImplementedError()
 
-    def current_freqs(self) -> Sequence[int]:
+    async def current_freqs(self) -> Sequence[int]:
         raise NotImplementedError()
 
-    def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
+    async def active(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         raise NotImplementedError()
 
+    # lru_cache does not work with async functions, so instead of using coroutines, we return a Task which is a Future
+    # and can be reawaited... and therefore cached. There are some corner cases but none of those should appear here.
     @functools.lru_cache(maxsize=128)
-    def _active_ts(self, timestamp: int) -> Sequence[StationAvailability]:
-        return self.active(util.timestamp_to_datetime(timestamp))
+    def _active_ts(self, timestamp: int) -> asyncio.Task[Sequence[StationAvailability]]:
+        return util.schedule(self.active(util.timestamp_to_datetime(timestamp)))
 
-    def active_for_frame(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
+    async def active_for_frame(self, at: Optional[datetime.datetime] = None) -> Sequence[StationAvailability]:
         # current/now/None should never be cached.
         if at is None:
-            return self.active(util.now())
+            return await self.active(util.now())
         # each ground station has its own frame period. We construct a similar one for this app, but it's not official.
-        return self._active_ts(pseudoframe_timestamp(at))
+        return await self._active_ts(util.pseudoframe_timestamp(at))
 
-    def add(self, availability: StationAvailability) -> bool:
+    async def add(self, availability: StationAvailability) -> bool:
         raise NotImplementedError()
 
-    def updated(self, availabilities: Optional[Sequence[StationAvailability]] = None) -> None:
+    async def updated(self, availabilities: Optional[Sequence[StationAvailability]] = None) -> None:
         if availabilities is None:
             STATIONS.refresh()
         else:
-            STATIONS.update_active(self.current())
-            self.publish('availability', util.now())
+            STATIONS.update_active(await self.current())
+            self.notify_event('availability', util.now())
 
     def on_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
+        util.schedule(self.aon_hfdl(packet_info))
+
+    async def aon_hfdl(self, packet_info: hfdl.HFDLPacketInfo) -> None:
         valid_at = util.timestamp_to_datetime(packet_info.timestamp)
         from_station = packet_info.ground_station['id']
         squitter = packet_info.get('spdu.gs_status', default=[])
@@ -180,24 +182,28 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
             valid_to = valid_at + AVAILABILITY_LIFETIMES[stratum.value]
             frequencies = sorted((int(sf['freq']) for sf in gs[freqs_key] if 'freq' in sf))
 
-            added = self.add(
+            added = await self.add(
                 StationAvailability(
-                    valid_at=valid_at,
-                    valid_to=valid_to,
                     station_id=sid,
                     stratum=stratum.value,
                     frequencies=frequencies,
                     agent=agent,
                     from_station=from_station,
+                    valid_at_frame=util.pseudoframe(valid_at),
+                    valid_to_frame=util.pseudoframe(valid_to) if valid_to is not None else None,
+                    when=valid_at,
                 )
             )
             if added:
                 updates += 1
         if updates:
-            self.publish("event", (kind, agent, packet_info.timestamp))
-            self.updated(self.current())
+            self.notify_event("event", (kind, agent, packet_info.timestamp))
+            await self.updated(await self.current())
 
     def on_community(self, airframes: dict) -> None:
+        util.schedule(self.aon_community(airframes))
+
+    async def aon_community(self, airframes: dict) -> None:
         updates = 0
         for gs in airframes.get('ground_stations', []):
             try:
@@ -221,21 +227,27 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
             frequencies = sorted(gs['frequencies'].get('active', []))
             from_station = gs.get('update_source', None)
 
-            added = self.add(StationAvailability(
-                valid_at=valid_at,
-                valid_to=valid_to,
-                station_id=sid,
-                stratum=stratum,
-                frequencies=frequencies,
-                agent='community',
-                from_station=None if isinstance(from_station, str) else from_station,
-            ))
+            added = await self.add(
+                StationAvailability(
+                    station_id=sid,
+                    stratum=stratum,
+                    frequencies=frequencies,
+                    agent='community',
+                    from_station=None if isinstance(from_station, str) else from_station,
+                    valid_at_frame=util.pseudoframe(valid_at),
+                    valid_to_frame=util.pseudoframe(valid_to) if valid_to is not None else None,
+                    when=valid_at,
+                )
+            )
             if added:
                 updates += 1
         if updates:
-            self.updated(self.current())
+            await self.updated(await self.current())
 
     def on_systable(self, station_table: str) -> None:
+        util.schedule(self.aon_systable(station_table))
+
+    async def aon_systable(self, station_table: str) -> None:
         data = util.deserialise_station_table(station_table)
 
         stratum = Strata.SYSTABLE.value
@@ -248,15 +260,18 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
                 continue
             frequencies = sorted(int(f) for f in gs['frequencies'])
 
-            added = self.add(StationAvailability(
-                valid_at=valid_at,
-                valid_to=valid_to,
-                station_id=sid,
-                stratum=stratum,
-                frequencies=[],
-                agent='systable',
-                from_station=None,
-            ))
+            added = await self.add(
+                StationAvailability(
+                    station_id=sid,
+                    stratum=stratum,
+                    frequencies=[],
+                    agent='systable',
+                    from_station=None,
+                    valid_at_frame=util.pseudoframe(valid_at),
+                    valid_to_frame=util.pseudoframe(valid_to) if valid_to is not None else None,
+                    when=valid_at,
+                )
+            )
             if added:
                 hfdl_stations[sid] = Station(
                     station_id=sid,
@@ -268,13 +283,13 @@ class AbstractNetworkUpdater(bus.LocalPublisher):
                 )
         if hfdl_stations:
             STATIONS.update(hfdl_stations)
-            self.updated()
+            await self.updated()
 
     def prune(self, _: Any = None) -> None:
         pass
 
 
-class CumulativePacketStats(bus.LocalPublisher):
+class CumulativePacketStats(bus.EventNotifier):
     packets: int = 0
     from_air: int = 0
     from_ground: int = 0
@@ -294,7 +309,7 @@ class CumulativePacketStats(bus.LocalPublisher):
             self.with_position += 1
         else:
             self.no_position += 1
-        self.publish('update', self)
+        self.notify_event('update', self)
 
 
 class StationLookup:
@@ -377,7 +392,7 @@ RECEIVER_FREQUENCIES: dict[int, str] = {}
 
 
 def receiver_for(frequency: int) -> str:
-    return RECEIVER_FREQUENCIES.get(frequency, 'unknown')
+    return RECEIVER_FREQUENCIES.get(frequency, f'{frequency}?')
 
 
 def set_receiver_for_frequency(frequency: int, receiver: str) -> None:

@@ -7,7 +7,6 @@
 import asyncio
 import collections
 import collections.abc
-import contextlib
 import datetime
 import functools
 import logging
@@ -32,13 +31,14 @@ class ReceiverError(Exception):
     pass
 
 
-class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteEventDispatcher):
+class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMessageDispatcher):
     frequencies: list[int]
     name: str
     tasks: list[asyncio.Task]
     conductor: Optional[str] = None
     last_seen: datetime.datetime
     registered: bool = False
+    broker: util.Broker
 
     def __init__(self, name: str, config: collections.abc.MutableMapping) -> None:
         self.uuid = str(uuid.uuid4())
@@ -47,9 +47,11 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         self.logger = logger.getChild(self.name)
         self.frequencies = []
         self.last_seen = util.now()
-        self.recipient_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
+        # subscriptions occur on one broker only. Local is preferred.
+        self.broker: util.Broker = bus.LOCAL_BROKER or bus.REMOTE_BROKER
+        self.recipient_subscriber = self.broker.subscriber(self.target)
         self.recipient_subscriber.add_callback(self.on_remote_event)
-        self.broadcast_subscriber = bus.REMOTE_BROKER.subscriber('/')
+        self.broadcast_subscriber = self.broker.subscriber('/')
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda m: m.subject.startswith('available'))
         self.broadcast_subscriber.add_callback(self.on_remote_event, lambda m: m.subject.startswith('unavailable'))
         self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
@@ -96,7 +98,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
             uuid = message.payload['dst']
         if uuid == self.uuid:
             self.keepalive()
-            bus.REMOTE_BROKER.publish(bus.Message(self.target, 'pong', self.payload(to=requester, src=self.uuid)))
+            self.broker.publish_soon(bus.Message(self.target, 'pong', self.payload(to=requester, src=self.uuid)))
         else:
             # observer is confused. Thinks another node is us. Reregister to clear it up.
             # This could cause flapping if there are two nodes with the same name actively running and registering.
@@ -127,7 +129,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     def register(self) -> None:
         if self.conductor is not None:
             self.setup_harnesses()
-            bus.REMOTE_BROKER.publish(
+            self.broker.publish_soon(
                 bus.Message(
                     self.conductor,
                     'register',
@@ -141,7 +143,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
     def deregister(self) -> None:
         if self.conductor:
             logger.info(f'{self} deregistering')
-            bus.REMOTE_BROKER.publish(bus.Message(self.conductor, 'deregister', self.payload()))
+            self.broker.publish_soon(bus.Message(self.conductor, 'deregister', self.payload()))
             task = util.schedule(self.stop())
             task.add_done_callback(self.deregistered)
 
@@ -178,7 +180,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
             self.logger.info(f'already listening to {frequencies}')
             self.publish_listening()
             return
-        self.logger.debug(f'switching to {frequencies} from {self.frequencies}')
+        self.logger.info(f'switching to {frequencies} from {self.frequencies}')
         await self.stop()
         self.frequencies = frequencies
         self.channel = self.observing_channel_for(frequencies)
@@ -201,9 +203,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
             self.publish_listening()
 
     def publish_listening(self) -> None:
-        bus.REMOTE_BROKER.publish(
-            bus.Message(self.target, 'listening', self.payload(frequencies=self.frequencies))
-        )
+        self.broker.publish_soon(bus.Message(self.target, 'listening', self.payload(frequencies=self.frequencies)))
 
     async def stop(self) -> None:
         pass
@@ -213,6 +213,7 @@ class LocalReceiver(bus.LocalPublisher, data.ChannelObserver, bus.GenericRemoteE
         yield None  # mypy gets confused without this.
 
     def clear(self) -> None:
+        logger.info(f'{self} clearing frequencies')
         self.frequencies = []
         self.channel = self.observing_channel_for([])
         self.publish_listening()
@@ -278,7 +279,7 @@ class Web888ExecReceiver(Web888Receiver):
         if not self.channel:
             logger.debug(f'{self} channel was empty')
             return
-        await asyncio.sleep(random.randrange(1, 20) / 10.0)   # thundering herd dispersal
+        await asyncio.sleep(random.randrange(1, 40) / 20.0)   # thundering herd dispersal
         if self.client is None:
             raise ValueError('client not set up. This should not be reached')
         if self.decoder is None:
@@ -440,6 +441,7 @@ class DirectReceiver(LocalReceiver):
 
     def clear(self) -> None:
         if (self.decoder is None or not self.decoder.is_running()):
+            logger.info(f'{self.name} has no running process {self.decoder}, clearing.')
             super().clear()
         else:
             logger.info(f'{self.name} still has running a process, not clearing')
@@ -464,7 +466,7 @@ class ReceiverNode():
         typename = receiver_config['type']
         klass = globals()[typename]
         receiver: LocalReceiver = klass(receiver_config['name'], receiver_config)
-        receiver.subscribe('fatal', self.on_fatal_error)
+        receiver.watch_event('fatal', self.on_fatal_error)
         self.local_receivers.append(receiver)
         return receiver
 
@@ -483,3 +485,6 @@ class ReceiverNode():
 
     def on_fatal_error(self, _: Any) -> None:
         pass
+
+    def is_receiver_managed(self, name: str) -> bool:
+        return name in [lr.name for lr in self.local_receivers]

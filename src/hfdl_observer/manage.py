@@ -31,7 +31,7 @@ EOL = '\n'
 REAPER_HORIZON = 3600
 
 
-class NetworkOverview(bus.LocalPublisher):
+class NetworkOverview(bus.EventNotifier):
     last_state: dict
     startables: list[Callable[[], Coroutine[Any, Any, None]]]
     tasks: list[asyncio.Task]
@@ -49,7 +49,7 @@ class NetworkOverview(bus.LocalPublisher):
             assert file_source.exists(), f'{file_source} does not exist'
             # prime this pump... shouldn't be necessary, but.
             updater.on_systable(file_source.read_text())
-            file_watcher.subscribe('text', updater.on_systable)
+            file_watcher.watch_event('text', updater.on_systable)
             self.startables.append(file_watcher.run)
         if self.save_path:
             try:
@@ -68,10 +68,10 @@ class NetworkOverview(bus.LocalPublisher):
                 url_source['url'],
                 period=url_source.get('period', 60 + ix)
             )
-            url_watcher.subscribe('response', updater.on_community)
+            url_watcher.watch_event('response', updater.on_community)
             self.startables.append(url_watcher.run)
         self.will_save = False
-        updater.subscribe('availability', self.schedule_save)
+        updater.watch_event('availability', self.schedule_save)
 
     def start(self) -> None:
         logger.info('starting network overview')
@@ -85,12 +85,20 @@ class NetworkOverview(bus.LocalPublisher):
     def schedule_save(self, _: Any) -> None:
         if not self.will_save:
             self.will_save = True
-            util.call_later(self.config['save_delay'], self.save)
-        self.publish('frequencies', {s.station_id: s.frequencies for s in self.updater.current()})
 
-    def save(self) -> None:
+            async def save_later() -> None:
+                await asyncio.sleep(self.config['save_delay'])
+                await self.save()
+
+            async def publish_later() -> None:
+                self.notify_event('frequencies', {s.station_id: s.frequencies for s in await self.updater.current()})
+
+            util.schedule(save_later())
+            util.schedule(publish_later())
+
+    async def save(self) -> None:
         logger.debug('saving ground stations frequencies')
-        current = self.updater.current()
+        current = await self.updater.current()
         if self.save_path:
             self.will_save = False
             out = []
@@ -98,9 +106,9 @@ class NetworkOverview(bus.LocalPublisher):
             for station in current:
                 sd = {
                     'id': station.station_id,
-                    'last_updated': util.datetime_to_timestamp(station.valid_at),
+                    'last_updated': util.datetime_to_timestamp(station.when),
                     'name': network.STATIONS[station.station_id].station_name,
-                    'when': station.valid_at.astimezone(datetime.timezone.utc).isoformat(),
+                    'when': station.when.astimezone(datetime.timezone.utc).isoformat(),
                     'stratum': station.stratum,
                     'update_source': station.from_station or station.agent,
                     'frequencies': {'active': station.frequencies}
@@ -115,20 +123,26 @@ class NetworkOverview(bus.LocalPublisher):
                 self.last_state = payload.copy()
                 payload['when'] = when
                 self.save_path.write_text(json.dumps(payload, indent=4) + '\n')
-            self.publish('state', payload)  # maybe should be a deepcopy
+            self.notify_event('state', payload)  # maybe should be a deepcopy
 
 
-class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
+class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteMessageDispatcher):
     name: str
     uuid: str
     channel: Optional[data.ObservingChannel]
     last_seen: datetime.datetime
     pings_sent: int = 0
     weight: int = data.DEFAULT_RECEIVER_WEIGHT
-    direct_subscriber: bus.RemoteSubscriber | None = None
+    direct_subscriber: util.Subscriber | None = None
+    broker: util.Broker
 
     def __init__(
-        self, name: str, uuid: str, observable_widths: list[int], weight: int = data.DEFAULT_RECEIVER_WEIGHT
+        self,
+        name: str,
+        uuid: str,
+        observable_widths: list[int],
+        weight: int = data.DEFAULT_RECEIVER_WEIGHT,
+        broker: util.Broker | None = None
     ) -> None:
         self.name = name
         self.uuid = uuid
@@ -136,7 +150,9 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         self.observable_channel_widths = observable_widths
         self.channel = None
         self.last_seen = util.now()
-        self.direct_subscriber = bus.REMOTE_BROKER.subscriber(self.target)
+        # proxies communicate with their "remotes" only over one broker.
+        self.broker: util.Broker = broker or bus.LOCAL_BROKER or bus.REMOTE_BROKER
+        self.direct_subscriber = self.broker.subscriber(self.target)
         self.direct_subscriber.add_callback(self.on_remote_event)
         self.direct_subscriber.start()
 
@@ -145,7 +161,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         return f'@receiver+{self.name}'
 
     def relay(self, subject: str, payload: Any) -> None:
-        bus.REMOTE_BROKER.publish(bus.Message(self.target, subject, payload))
+        self.broker.publish_soon(bus.Message(self.target, subject, payload))
 
     def keepalive(self) -> None:
         self.pings_sent = 0
@@ -166,7 +182,7 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
         else:
             logger.info(f'{self} bad notification. ({payload["uuid"]}) {len(frequencies)} frequencies #{self.pings_sent}')
             del payload['frequencies']
-            bus.REMOTE_BROKER.publish(bus.Message(self.target, "deregister", payload))
+            self.broker.publish_soon(bus.Message(self.target, "deregister", payload))
             if self.direct_subscriber is not None:
                 self.direct_subscriber._stop()
                 self.direct_subscriber = None
@@ -211,8 +227,13 @@ class ReceiverProxy(data.ChannelObserver, bus.GenericRemoteEventDispatcher):
             freqs = 0
         return f'{self.name} via {self.uuid} on {freqs} freqs{middle}'
 
+    def __del__(self) -> None:
+        if self.direct_subscriber is not None:
+            self.direct_subscriber._stop()
+            self.direct_subscriber = None
 
-class AbstractOrchestrator(bus.LocalPublisher, data.ChannelObserver):
+
+class AbstractOrchestrator(bus.EventNotifier, data.ChannelObserver):
     ranked_station_ids: list[int]
     ignored_frequencies: list[tuple[int, int]]
     proxies: list[ReceiverProxy]
@@ -225,7 +246,7 @@ class AbstractOrchestrator(bus.LocalPublisher, data.ChannelObserver):
         self.ignored_frequencies = util.normalize_ranges(ignores)
         self.proxies = []
         self.reaper = Reaper()
-        self.reaper.subscribe('dead-receiver', self.on_dead_receiver)
+        self.reaper.watch_event('dead-receiver', self.on_dead_receiver)
 
     def add_receiver(self, receiver: ReceiverProxy) -> None:
         self.proxies.append(receiver)
@@ -408,7 +429,7 @@ class DiverseOrchestrator(UniformOrchestrator):
         return actual_channels
 
 
-class Reaper(bus.LocalPublisher):
+class Reaper(bus.EventNotifier):
     channels: dict[int, data.ObservingChannel]
     last_seen: dict[int, int]
 
@@ -450,14 +471,15 @@ class Reaper(bus.LocalPublisher):
         horizon = now - REAPER_HORIZON
         for freq, channel in self.channels.items():
             if 0 < self.last_seen.get(freq, 0) < horizon:
-                self.publish('dead-receiver', channel.frequencies)
+                self.notify_event('dead-receiver', channel.frequencies)
 
 
-class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
+class ConductorNode(bus.EventNotifier, bus.GenericRemoteMessageDispatcher):
     proxies: dict[str, ReceiverProxy]
     orchestration_task: None | asyncio.Handle = None
     last_orchestrated: datetime.datetime
     listener_info: dict
+    recipient_subscribers: list[util.Subscriber]
 
     def __init__(self, config: collections.abc.Mapping) -> None:
         super().__init__()
@@ -465,17 +487,17 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
         self.uuid = f'@{uuid.uuid4()}'
         self.proxies = {}
         self.conductor = DiverseOrchestrator(config['conductor'])
-        self.recipient_subscriber = self.message_broker().subscriber(self.uuid)
-        self.recipient_subscriber.add_callback(self.on_remote_event)
+        self.recipient_subscribers = []
+        for broker in bus.brokers():
+            subscriber = broker.subscriber(self.uuid)
+            self.recipient_subscribers.append(subscriber)
+            subscriber.add_callback(self.on_remote_event)
         self.announcer = bus.PeriodicCallback(10, [self.announce], False)
         self.watchdog = bus.PeriodicCallback(30, [self.heartbeat], chatty=False)
         self.last_orchestrated = util.now()
 
-    def message_broker(self) -> bus.RemoteBroker:
-        raise NotImplementedError(self.__class__.__name__)
-
     def announce(self) -> None:
-        self.message_broker().publish(bus.Message(
+        bus.publish_soon(bus.Message(
             '/observer',
             'available',
             {
@@ -523,22 +545,22 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
                 else:
                     untargetted.append(frequency)
 
-        self.publish('orchestrated', {
+        self.notify_event('orchestrated', {
             'targetted': targetted,
             'untargetted': untargetted,
             'active': all_active,
         })
 
-        self.publish('active', all_active)
-        self.publish('observing', (targetted, untargetted))
-        self.publish('frequencies', targetted_freqs)
+        self.notify_event('active', all_active)
+        self.notify_event('observing', (targetted, untargetted))
+        self.notify_event('frequencies', targetted_freqs)
 
     def outstanding_awaitables(self) -> list[Awaitable]:
         outstanding: list[Awaitable] = [
             self.announcer.stop(),
             self.watchdog.stop(),
-            self.recipient_subscriber.stop(),
         ]
+        outstanding.extend(s.stop() for s in self.recipient_subscribers)
         return outstanding
 
     async def stop(self) -> None:
@@ -557,7 +579,8 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
                     proxy.ping(self.uuid)
 
     def start(self) -> None:
-        self.recipient_subscriber.start()
+        for recipient_subscriber in self.recipient_subscribers:
+            recipient_subscriber.start()
         self.announcer.start()
         self.watchdog.start()
         # reaper is currently not used: self.conductor.reaper.start()
@@ -569,10 +592,12 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
             pass
         else:
             if old_proxy.uuid != uuid:
-                self.message_broker().publish(bus.Message(old_proxy.target, 'deregister', old_proxy.uuid))
+                bus.publish_soon(bus.Message(old_proxy.target, 'deregister', old_proxy.uuid))
                 self.conductor.remove_receiver(old_proxy)
                 del self.proxies[name]
-        proxy = ReceiverProxy(name, uuid, widths, weight)
+        is_local = self.is_receiver_managed(name)
+        broker = bus.LOCAL_BROKER if is_local else bus.REMOTE_BROKER
+        proxy = ReceiverProxy(name, uuid, widths, weight, broker)
         self.add_receiver_proxy(proxy)
         proxy.registered()
 
@@ -599,3 +624,6 @@ class ConductorNode(bus.LocalPublisher, bus.GenericRemoteEventDispatcher):
 
     def on_frequencies(self, targetted_freqs: dict[int, list[int]]) -> None:
         self.maybe_orchestrate()
+
+    def is_receiver_managed(self, name: str) -> bool:
+        return False

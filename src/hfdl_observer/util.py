@@ -9,6 +9,7 @@ import collections
 import collections.abc
 import concurrent.futures
 import contextlib
+import dataclasses
 import datetime
 import json
 import logging
@@ -218,8 +219,9 @@ async def cleanup_task(task: asyncio.Task) -> None:
 class async_reader(contextlib.AbstractAsyncContextManager):
     transport: asyncio.ReadTransport | None = None
 
-    def __init__(self, openable: IO[Any] | None) -> None:
+    def __init__(self, openable: IO[Any] | None, close_on_exit: bool = True) -> None:
         self.openable = openable
+        self.close_on_exit = close_on_exit
 
     async def __aenter__(self) -> asyncio.StreamReader | None:
         """Wrap a readable pipe in a stream"""
@@ -235,7 +237,9 @@ class async_reader(contextlib.AbstractAsyncContextManager):
         return stream_reader
 
     async def __aexit__(self, *exc_info: Any) -> None:
-        if self.transport is not None:
+        # closing this on a pipe managed by a subprocess handler *might* be responsible for "detached" EBADFs.
+        # TODO: investigate this.
+        if self.close_on_exit and self.transport is not None:
             self.transport.close()
 
 
@@ -345,6 +349,84 @@ async def in_thread(func: Callable, *args: Any, **kwargs: Any) -> Any:
     return await loop.run_in_executor(thread_local.executor, run)
 
 
+async def in_db_thread(func: Callable, *args: Any, **kwargs: Any) -> Any:
+    # Runs a function in a separate thread via an executor in the current event loop so it can be awaited.
+    if not hasattr(thread_local, 'db_executor'):
+        thread_local.db_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    loop: asyncio.AbstractEventLoop = thread_local.loop
+
+    def run() -> Any:
+        return func(*args, **kwargs)
+
+    return await loop.run_in_executor(thread_local.db_executor, run)
+
+
 def is_shutting_down() -> bool:
     shutting_down: bool = thread_local.shutdown_event.is_set()
     return shutting_down
+
+
+@dataclasses.dataclass
+class Message:
+    target: str
+    subject: str
+    payload: Any
+
+    def __str__(self) -> str:
+        body: str
+        if isinstance(self.payload, str):
+            body = self.payload
+        else:
+            body = self.payload.__class__.__name__
+            if hasattr(self.payload, '__len__'):
+                body = f'{body} l={len(self.payload)}'
+        return f'<Message: t={self.target} s={self.subject} b={body}>'
+
+
+class Publisher:
+    async def publish(self, message: Message) -> None:
+        raise NotImplementedError(self.__class__.__name__)
+
+
+class Subscriber:
+    callbacks: list[tuple[None | Callable[[Message], bool], Callable[[Message], None]]]
+
+    def __init__(self) -> None:
+        self.callbacks = []
+
+    def add_callback(
+        self, callback: Callable[[Message], None], filter: None | Callable[[Message], bool] = None
+    ) -> None:
+        self.callbacks.append((filter, callback))
+
+    def receive(self, message: Message) -> None:
+        logged = False
+        for filter, callback in self.callbacks:
+            if not filter or filter(message):
+                if not logged:
+                    # logger.debug(f'accepted {message}')
+                    logged = True
+                call_soon(callback, message)
+
+    def start(self) -> asyncio.Task:
+        raise NotImplementedError(self.__class__.__name__)
+
+    async def stop(self) -> None:
+        self._stop()
+
+    def _stop(self) -> None:
+        raise NotImplementedError(self.__class__.__name__)
+
+
+class Broker:
+    def subscriber(self, target: str) -> Subscriber:
+        raise NotImplementedError(self.__class__.__name__)
+
+    def publisher(self) -> Publisher:
+        raise NotImplementedError(self.__class__.__name__)
+
+    async def publish(self, message: Message) -> None:
+        raise NotImplementedError(self.__class__.__name__)
+
+    def publish_soon(self, message: Message) -> None:
+        schedule(self.publish(message))

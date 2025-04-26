@@ -41,7 +41,7 @@ class HFDLPacketConsumer:
     def consume(self, packet_str: str, packet: hfdl_observer.hfdl.HFDLPacketInfo) -> None:
         if self.matches(packet_str):
             for callback in self.callbacks:
-                callback(packet)
+                util.call_soon(callback, packet)
 
     @classmethod
     def any_in(cls, *terms: str) -> Callable[[str], bool]:
@@ -91,7 +91,7 @@ class UDPProtocol(asyncio.protocols.BaseProtocol):
             del self.buffers[addr]
 
 
-class HFDLListener(hfdl_observer.bus.LocalPublisher):
+class HFDLListener(hfdl_observer.bus.EventNotifier):
     running: bool = False
 
     def __init__(self, settings: dict) -> None:

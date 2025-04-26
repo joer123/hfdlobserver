@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Sequenc
 
 import hfdl_observer.data as data
 import hfdl_observer.network as network
-import hfdl_observer.util
+import hfdl_observer.util as util
 
 
 logger = logging.getLogger(__name__)
@@ -90,12 +90,12 @@ class Table:
     row_headers: dict[int | str, RowHeader]
     bins: DataRows
 
-    def __init__(
+    def _populate(
         self, counts: Mapping[int | str, Sequence[int]], bin_size: int, start: Optional[datetime.datetime] = None
     ) -> None:
         self.bins = {k: [Cell(v) for v in r] for k, r in counts.items()}
         self.row_headers = {k: RowHeader(str(k)) for k in counts.keys()}
-        when = start if start is not None else hfdl_observer.util.now()
+        when = start if start is not None else util.now()
         if counts:
             num_columns = max(len(r) for r in counts.values())
             self.column_headers = [
@@ -144,16 +144,15 @@ class Table:
 
 
 class TableByFrequency(Table):
+    async def populate(self, bin_size: int, num_bins: int) -> None:
+        packets = await data.PACKET_WATCHER.packets_by_frequency( bin_size, num_bins)
+        super()._populate(packets, bin_size)
 
-    def __init__(self, bin_size: int, num_bins: int) -> None:
-        packets = data.PACKET_WATCHER.packets_by_frequency(bin_size, num_bins)
-        super().__init__(packets, bin_size)
-
-    def fill_active_state(self) -> None:
+    async def fill_active_state(self) -> None:
         for ix, column in enumerate(self.column_headers):
             when = column.when if column.index else None  # column 0 is "NOW", which triggers different active logic.
             column_active: dict[int, network.StationAvailability] = {}
-            active = network.UPDATER.active_for_frame(when)
+            active = await network.UPDATER.active_for_frame(when)
             for a in active:
                 for f in a.frequencies:
                     column_active[f] = a
@@ -181,15 +180,15 @@ class TableByFrequency(Table):
 
 
 class TableByBand(Table):
-    def __init__(self, bin_size: int, num_bins: int) -> None:
-        packets = data.PACKET_WATCHER.packets_by_band(bin_size, num_bins)
-        super().__init__(packets, bin_size)
+    async def populate(self, bin_size: int, num_bins: int) -> None:
+        packets = await data.PACKET_WATCHER.packets_by_band(bin_size, num_bins)
+        super()._populate(packets, bin_size)
 
 
 class TableByStation(Table):
-    def __init__(self, bin_size: int, num_bins: int) -> None:
-        packets = data.PACKET_WATCHER.packets_by_station(bin_size, num_bins)
-        super().__init__(packets, bin_size)
+    async def populate(self, bin_size: int, num_bins: int) -> None:
+        packets = await data.PACKET_WATCHER.packets_by_station(bin_size, num_bins)
+        super()._populate(packets, bin_size)
         for k, rh in self.row_headers.items():
             rh.station_id = int(k)
             rh.label = f'#{k}. {network.STATIONS[k].station_name}'
@@ -200,19 +199,19 @@ class TableByStation(Table):
 
 
 class TableByAgent(Table):
-    def __init__(self, bin_size: int, num_bins: int) -> None:
-        packets = data.PACKET_WATCHER.packets_by_agent(bin_size, num_bins)
-        super().__init__(packets, bin_size)
+    async def populate(self, bin_size: int, num_bins: int) -> None:
+        packets = await data.PACKET_WATCHER.packets_by_agent(bin_size, num_bins)
+        super()._populate(packets, bin_size)
 
 
 class TableByFrequencySet(Table):
-    def __init__(self, bin_size: int, num_bins: int, frequency_sets: dict[int, str]) -> None:
+    async def populate(self, bin_size: int, num_bins: int, frequency_sets: dict[int, str]) -> None:
         # this is tough, since the receiver data is indirect, linked by frequency
-        packets = data.PACKET_WATCHER.packets_by_frequency_set(bin_size, num_bins, frequency_sets)
-        super().__init__(packets, bin_size)
+        packets = await data.PACKET_WATCHER.packets_by_frequency_set(bin_size, num_bins, frequency_sets)
+        super()._populate(packets, bin_size)
 
 
 class TableByReceiver(Table):
-    def __init__(self, bin_size: int, num_bins: int) -> None:
-        packets = data.PACKET_WATCHER.packets_by_receiver(bin_size, num_bins)
-        super().__init__(packets, bin_size)
+    async def populate(self, bin_size: int, num_bins: int) -> None:
+        packets = await data.PACKET_WATCHER.packets_by_receiver(bin_size, num_bins)
+        super()._populate(packets, bin_size)

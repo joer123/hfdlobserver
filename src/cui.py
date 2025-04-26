@@ -11,7 +11,7 @@ import functools
 import datetime
 import logging
 
-from typing import Any, Generic, Callable, Iterable, Optional, Sequence, TypeVar, Union
+from typing import Any, Generic, Callable, Coroutine, Iterable, Optional, Sequence, TypeVar, Union
 
 import rich.console
 import rich.highlighter
@@ -98,7 +98,7 @@ class ObserverDisplay:
         self.update_status()
         self.update_tty_bar()
         self.keyboard = self.setup_keyboard(keyboard)
-        forecaster.subscribe('response', self.on_forecast)
+        forecaster.watch_event('response', self.on_forecast)
 
     def update(self) -> None:
         t = rich.table.Table.grid(expand=True, pad_edge=False, padding=(0, 0))
@@ -307,9 +307,9 @@ class CumulativeLine:
 
     def register(self, observer: hfdlobserver.HFDLObserverController, totals: network.CumulativePacketStats) -> None:
         self.cumulative = totals
-        totals.subscribe('update', self.on_update)
-        observer.subscribe('active', self.on_active)
-        observer.subscribe('observing', self.on_observing)
+        totals.watch_event('update', self.on_update)
+        observer.watch_event('active', self.on_active)
+        observer.watch_event('observing', self.on_observing)
 
     def on_update(self, _: Any) -> None:
         if self.display:
@@ -453,21 +453,29 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
         show_quiet: bool,
     ) -> None:
         self.bin_size = bin_size
-        self.source = heat.TableByFrequency(self.bin_size, num_bins)
-
-        def rowheader_factory(key: Union[int, str], tags: Sequence[str]) -> heat.RowHeader:
-            return heat.RowHeader(str(key), station_id=network.STATIONS[key].station_id, tags=tags)
-
         self.flexible_width = flexible_width
-        self.source.tag_rows(targetted, ['targetted'], default_factory=rowheader_factory)
-        self.source.tag_rows(untargetted, ['untargetted'], default_factory=rowheader_factory)
-        current_freqs = network.UPDATER.current_freqs()
-        self.source.tag_rows(current_freqs, ['active'], default_factory=rowheader_factory if all_active else None)
+        self.show_all_active = all_active
         self.show_active_line = show_active_line
         self.show_confidence = show_confidence
         self.show_targetting = show_targetting
         self.show_quiet = show_quiet
-        self.source.fill_active_state()
+        self.targetted = targetted
+        self.untargetted = untargetted
+        self.num_bins = num_bins
+
+    async def fetch(self) -> None:
+        def rowheader_factory(key: Union[int, str], tags: Sequence[str]) -> heat.RowHeader:
+            return heat.RowHeader(str(key), station_id=network.STATIONS[key].station_id, tags=tags)
+
+        self.source = heat.TableByFrequency()
+        await self.source.populate(self.bin_size, self.num_bins)
+
+        self.source.tag_rows(self.targetted, ['targetted'], default_factory=rowheader_factory)
+        self.source.tag_rows(self.untargetted, ['untargetted'], default_factory=rowheader_factory)
+
+        current_freqs = await network.UPDATER.current_freqs()
+        self.source.tag_rows(current_freqs, ['active'], default_factory=rowheader_factory if self.show_all_active else None)
+        await self.source.fill_active_state()
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -503,7 +511,7 @@ class HeatMapByFrequencyFormatter(AbstractHeatMapFormatter[heat.TableByFrequency
     def row(self, row_id: Union[str, int], row_data: Sequence[heat.Cell], width: int) -> list[CellText]:
         if (
             self.show_quiet
-            or self.source.row_headers[row_id].is_tagged('active')
+            or (self.show_all_active and self.source.row_headers[row_id].is_tagged('active'))
             or any(cell.value for cell in row_data)
         ):
             return super().row(row_id, row_data, width)
@@ -541,12 +549,17 @@ class HeatMapByBandFormatter(AbstractHeatMapFormatter[heat.TableByBand]):
     ) -> None:
         self.bin_size = bin_size
         self.flexible_width = flexible_width
-        self.source = heat.TableByBand(self.bin_size, num_bins)
+        self.num_bins = num_bins
+        self.all_bands = all_bands
+
+    async def fetch(self) -> None:
+        self.source = heat.TableByBand()
+        await self.source.populate(self.bin_size, self.num_bins)
 
         def rowheader_factory(key: Union[int, str], tags: Sequence[str]) -> heat.RowHeader:
             return heat.RowHeader(str(key), tags=tags)
 
-        if all_bands:
+        if self.all_bands:
             bands: set[int] = set()
             for allocated in network.STATIONS.assigned().values():
                 bands.update(int(f // 1000) for f in allocated)
@@ -573,7 +586,11 @@ class HeatMapByStationFormatter(AbstractHeatMapFormatter[heat.TableByStation]):
     ) -> None:
         self.bin_size = bin_size
         self.flexible_width = flexible_width
-        self.source = heat.TableByStation(self.bin_size, num_bins)
+        self.num_bins = num_bins
+
+    async def fetch(self) -> None:
+        self.source = heat.TableByStation()
+        await self.source.populate(self.bin_size, self.num_bins)
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -596,7 +613,11 @@ class HeatMapByAgentFormatter(AbstractHeatMapFormatter[heat.TableByAgent]):
     ) -> None:
         self.bin_size = bin_size
         self.flexible_width = flexible_width
-        self.source = heat.TableByAgent(self.bin_size, num_bins)
+        self.num_bins = num_bins
+
+    async def fetch(self) -> None:
+        self.source = heat.TableByAgent()
+        await self.source.populate(self.bin_size, self.num_bins)
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -621,7 +642,11 @@ class HeatMapByReceiverFormatter(AbstractHeatMapFormatter[heat.TableByReceiver])
         self.bin_size = bin_size
         self.flexible_width = flexible_width
         self.proxies = proxies
-        self.source = heat.TableByReceiver(self.bin_size, num_bins)
+        self.num_bins = num_bins
+
+    async def fetch(self) -> None:
+        self.source = heat.TableByReceiver()
+        await self.source.populate(self.bin_size, self.num_bins)
 
     def row_header(
         self, header: heat.RowHeader, row: Sequence[heat.Cell]
@@ -638,14 +663,15 @@ class HeatMap:
     config: dict
     last_render_time: datetime.datetime = util.now()
     bin_size: int = 60
-    data_source: Callable[[int], AbstractHeatMapFormatter]
+    data_source: Callable[[int], Coroutine[Any, Any, AbstractHeatMapFormatter[Any]]]
     display: ObserverDisplay
     refresh_period = 64  # two frames.
     task: Optional[asyncio.Task] = None
     targetted_frequencies: Sequence[int]
     untargetted_frequencies: Sequence[int]
     current_mode: str
-    deferred_render_task: None | asyncio.Handle = None
+    deferred_render_task: None | asyncio.Handle | asyncio.Task = None
+    renderer_available: asyncio.Event
 
     def __init__(self, config: dict) -> None:
         self.config = config
@@ -662,6 +688,8 @@ class HeatMap:
         self.refresh_period = max(1, min(self.refresh_period, self.bin_size))
         self.targetted_frequencies = []
         self.untargetted_frequencies = []
+        self.renderer_available = asyncio.Event()
+        self.renderer_available.set()
 
     def set_bin_size(self, bin_size: int) -> None:
         self.bin_size = min(3600, max(60, int(bin_size)))
@@ -675,8 +703,8 @@ class HeatMap:
             raise ValueError(f'display mode not supported: {mode}') from None
         self.maybe_render()
 
-    def by_frequency(self, num_bins: int) -> AbstractHeatMapFormatter:
-        return HeatMapByFrequencyFormatter(
+    async def by_frequency(self, num_bins: int) -> AbstractHeatMapFormatter:
+        source = HeatMapByFrequencyFormatter(
             self.bin_size,
             num_bins,
             util.tobool(self.config.get('flexible_width', False)),
@@ -688,32 +716,46 @@ class HeatMap:
             util.tobool(self.config.get('show_targetting', True)),
             util.tobool(self.config.get('show_quiet', True)),
         )
+        await source.fetch()
+        return source
 
-    def by_band(self, num_bins: int) -> AbstractHeatMapFormatter:
-        return HeatMapByBandFormatter(
+    async def by_band(self, num_bins: int) -> AbstractHeatMapFormatter:
+        source = HeatMapByBandFormatter(
             self.bin_size,
             num_bins,
             util.tobool(self.config.get('flexible_width', True)),
             util.tobool(self.config.get('show_all_bands', True))
         )
+        await source.fetch()
+        return source
 
-    def by_station(self, num_bins: int) -> AbstractHeatMapFormatter:
-        return HeatMapByStationFormatter(self.bin_size, num_bins, util.tobool(self.config.get('flexible_width', True)))
+    async def by_station(self, num_bins: int) -> AbstractHeatMapFormatter:
+        source = HeatMapByStationFormatter(
+            self.bin_size, num_bins, util.tobool(self.config.get('flexible_width', True))
+        )
+        await source.fetch()
+        return source
 
-    def by_agent(self, num_bins: int) -> AbstractHeatMapFormatter:
-        return HeatMapByAgentFormatter(self.bin_size, num_bins, util.tobool(self.config.get('flexible_width', True)))
+    async def by_agent(self, num_bins: int) -> AbstractHeatMapFormatter:
+        source = HeatMapByAgentFormatter(
+            self.bin_size, num_bins, util.tobool(self.config.get('flexible_width', True))
+        )
+        await source.fetch()
+        return source
 
-    def by_receiver(self, num_bins: int) -> AbstractHeatMapFormatter:
-        return HeatMapByReceiverFormatter(
+    async def by_receiver(self, num_bins: int) -> AbstractHeatMapFormatter:
+        source = HeatMapByReceiverFormatter(
             self.bin_size, num_bins,
             util.tobool(self.config.get('flexible_width', True)),
             list(self.observer.proxies.values())
         )
+        await source.fetch()
+        return source
 
     def register(self, observer: hfdlobserver.HFDLObserverController) -> None:
         self.observer = observer
-        observer.subscribe('packet', self.on_hfdl)
-        observer.subscribe('observing', self.on_observing)
+        observer.watch_event('packet', self.on_hfdl)
+        observer.watch_event('observing', self.on_observing)
 
     def on_hfdl(self, packet: hfdl.HFDLPacketInfo) -> None:
         if not self.task:
@@ -726,19 +768,20 @@ class HeatMap:
             self.start()
 
     def maybe_render(self) -> None:
-        next_render_time = self.last_render_time + MAP_REFRESH_DELTA
         try:
-            current_task = asyncio.current_task()
+            asyncio.current_task()
         except Exception as err:
-            logger.info(f'exception getting task for maybe-render {err}')
+            logger.debug(f'not in a task? {err}')
             return
-        if current_task and current_task == self.deferred_render_task:
-            self.render()
-        elif self.deferred_render_task is None:
+        next_render_time = self.last_render_time + MAP_REFRESH_DELTA
+        if self.deferred_render_task is None:
             if next_render_time <= util.now():
-                self.deferred_render_task = util.call_soon(self.render)
+                self.deferred_render_task = util.schedule(self.render())
             else:
-                self.deferred_render_task = util.call_later(MAP_REFRESH_PERIOD, self.render)
+                async def delayed_render() -> None:
+                    await asyncio.sleep(MAP_REFRESH_PERIOD)
+                    await self.render()
+                self.deferred_render_task = util.schedule(delayed_render())
         else:
             logger.debug(f'render deferred. Next render time {next_render_time}')
 
@@ -764,59 +807,85 @@ class HeatMap:
             + 1  # right padding
         )
 
-    def render(self) -> None:
+    def render_column_headers(self, source: AbstractHeatMapFormatter, cells_visible: int, bin_str: str) -> rich.text.Text:
+        columns: list[CellText] = []
+        title = source.title
+        title_len = len(title) + 1
+
+        # walk backwards through the column headers until there's enough room for the mode title.
+        for column_text in reversed(source.column_headers(bin_str, self.display.current_width, cells_visible)):
+            if title_len < 0:
+                columns.append(column_text)
+            else:
+                title_len -= len(column_text[0]) if column_text[0] is not None else 0
+                if title_len < 0:
+                    padding_needed = max(0, -title_len - 1)
+                    padded_title = (" " * padding_needed) + title
+                    title_text = (f'🭪{padded_title}', PANE_BAR_REVERSED)
+                    columns.append(title_text)
+        columns.reverse()
+
+        return self.celltexts_to_text(columns)
+
+    def render_data_rows(self, source: AbstractHeatMapFormatter, cells_visible: int) -> list[tuple[rich.text.Text | str, str | None]]:
+        rows: list[tuple[rich.text.Text | str, str | None]] = []
+        any_rows = False
+        for key, row in source.rows():
+            any_rows = True
+            visible_row = row[:cells_visible]
+            cells = source.row(key, visible_row, self.display.current_width)
+            if cells:
+                row_text = self.celltexts_to_text(cells, None)
+                rows.append((row_text, "white on black"))
+        if not any_rows:
+            rows.append((" Awaiting data...", None))
+        return rows
+
+    async def render(self) -> None:
         # Hypothetically, we could represent each bin/ on each row as a "cell" Rich's table display. This would be
         # slightly less complex on code in this module. Rich is a good framework, but it is generic and does a lot of
         # extra work to figure out the layout when it's already statically known. Instead, this code (and its helpers)
         # combines fragments into the smallest number of Text segments possible, and represents each row on the table
         # with a single Text. Not ideal, but the concept of Cells is retained as it its flexibility
         #
-        self.deferred_render_task = None
         if not hasattr(self, 'display') or util.is_shutting_down():
+            self.deferred_render_task = None
             return
+        await self.renderer_available.wait()
+        self.renderer_available.clear()
+        self.deferred_render_task = None
+        try:
+            await self._render()
+        finally:
+            self.renderer_available.set()
+
+    async def _render(self) -> None:
         body_width = self.display.current_width - self.reserved_width  # (3 + 9 + 6 + 4 + 1)
         possible_bins = body_width // 3
         if self.bin_size > 60:
             bin_str = f'{self.bin_size}s'
         else:
             bin_str = 'minute'
-        source = self.data_source(possible_bins)
+        source = await self.data_source(possible_bins)
         if not source.is_empty:
             self.last_render_time = util.now()
             cells_visible = source.cells_visible(body_width)
             table = rich.table.Table.grid()
 
-            columns: list[CellText] = []
-            title = source.title
-            title_len = len(title) + 1
-            # walk backwards through the column headers until there's enough room for the mode title.
-            for column_text in reversed(source.column_headers(bin_str, self.display.current_width, cells_visible)):
-                if title_len < 0:
-                    columns.append(column_text)
-                else:
-                    title_len -= len(column_text[0]) if column_text[0] is not None else 0
-                    if title_len < 0:
-                        padding_needed = max(0, -title_len - 1)
-                        padded_title = (" " * padding_needed) + title
-                        title_text = (f'🭪{padded_title}', PANE_BAR_REVERSED)
-                        columns.append(title_text)
-            columns.reverse()
-
-            header_text = self.celltexts_to_text(columns)
+            header_text = self.render_column_headers(source, cells_visible, bin_str)
             table.add_row(header_text, style=PANE_BAR)
 
             # logger.info(f'{body_width} // {source.cells_visible(body_width)} @ {source.column_size} = {source.cells_visible(body_width) * source.column_size}')
 
-            for key, row in source.rows():
-                visible_row = row[:cells_visible]
-                cells = source.row(key, visible_row, self.display.current_width)
-                if cells:
-                    row_text = self.celltexts_to_text(cells, None)
-                    table.add_row(row_text, style="white on black")
+            for row_text, row_style in self.render_data_rows(source, cells_visible):
+                if row_style:
+                    table.add_row(row_text, style=row_style)
+                else:
+                    table.add_row(row_text)
+
             # for reasons I don't understand, source.source will not get garbage collected. Since we're done with the
             # source, it can be del'd, but it still feels dirty. del'ing `source` alone is insufficient.
             del source.source
-            del columns
         else:
             table = rich.table.Table.grid(expand=True)
             head = f" 📊 per {bin_str}"
@@ -828,7 +897,7 @@ class HeatMap:
     async def run(self) -> None:
         try:
             while not util.is_shutting_down():
-                self.render()
+                await self.render()  # maybe_render might be better if performance is impacted.
                 await asyncio.sleep(self.refresh_period)
         except Exception as exc:
             logger.error('oops', exc_info=exc)
