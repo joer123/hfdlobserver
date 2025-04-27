@@ -25,7 +25,7 @@ from typing import Any, AsyncGenerator, Callable, Coroutine, IO, Union
 
 logger = logging.getLogger(__name__)
 thread_local = threading.local()
-thread_local.shutdown_event = threading.Event()
+thread_local.shutdown_event = asyncio.Event()
 thread_local.loop = None
 
 

@@ -11,6 +11,7 @@ import collections
 import collections.abc
 import logging
 import logging.handlers
+import os
 import pathlib
 import sys
 
@@ -41,7 +42,9 @@ else:
 
 
 logger = logging.getLogger(sys.argv[0].rsplit('/', 1)[-1].rsplit('.', 1)[0] if __name__ == '__main__' else __name__)
-TRACEMALLOC = False
+TRACEMALLOC = util.tobool(os.getenv('TRACEMALLOC', False))
+if TRACEMALLOC:
+    import tracemalloc
 
 try:
     import sqlite3  # noqa: F401
@@ -68,8 +71,8 @@ class HFDLObserverNode(receivers.ReceiverNode):
 
     async def shutdown(self) -> None:
         awaitables = [receiver.stop() for receiver in self.local_receivers]
-        await asyncio.gather(*awaitables, return_exceptions=True)
         self.local_receivers = []
+        await asyncio.gather(*awaitables, return_exceptions=True)
 
 
 class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
@@ -161,47 +164,57 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
 
     async def shutdown(self) -> None:
         awaitables = [receiver.stop() for receiver in self.local_receivers]
-        await asyncio.gather(*awaitables, return_exceptions=True)
         self.local_receivers = []
+        await asyncio.gather(*awaitables, return_exceptions=True)
 
     def is_receiver_managed(self, name: str) -> bool:
         return receivers.ReceiverNode.is_receiver_managed(self, name)
+
+
+class TraceMallocery(bus.PeriodicTask):
+    def prepare(self) -> None:
+        tracemalloc.start(2)
+        self.last_snapshot = tracemalloc.take_snapshot()
+        logger.warning("tracemalloc on")
+
+    async def execute(self) -> None:
+        p = pathlib.Path('memory.trace')
+        with p.open("a", encoding='utf8') as f:
+            f.write('====\n')
+            f.write(f'{util.now()}\n')
+            snapshot = tracemalloc.take_snapshot()
+            try:
+                diff = snapshot.compare_to(self.last_snapshot, 'lineno')
+                for e in diff:
+                    f.write(f'{e.size}|{e.size_diff}|{e.count}|{";".join(str(x) for x in e.traceback.format(5))}\n')
+                # fname = f'memory-{util.now().isoformat().replace(':', '').replace('-', '')}.trace'
+                # snapshot.dump(fname)
+            except Exception as err:
+                logger.error('error in tracemallocry', exc_info=err)
+            else:
+                logger.info('tracemalloc checkpoint')
+        self.last_snapshot = snapshot
 
 
 async def async_observe(observer: HFDLObserverController | HFDLObserverNode) -> None:
     logger.info("Starting observer")
 
     if TRACEMALLOC:
-        import tracemalloc
-        tracemalloc.start(2)
-        last_snapshot = tracemalloc.take_snapshot()
-        logger.warning("tracemalloc on")
-    count = 0
+        tracemallocery = TraceMallocery(60)
+        tracemallocery.start()
     observer.start()
-    while observer.running and not util.is_shutting_down():
-        await asyncio.sleep(1)
-        if util.is_shutting_down():
-            logger.info(f'{observer} will exit')
-            raise asyncio.CancelledError()
-        count += 1
-        if TRACEMALLOC and count > 300:
-            count = 0
-            p = pathlib.Path('memory.trace')
-            with p.open("a", encoding='utf8') as f:
-                f.write('====\n')
-                f.write(f'{util.now()}\n')
-                snapshot = tracemalloc.take_snapshot()
-                try:
-                    diff = snapshot.compare_to(last_snapshot, 'lineno')
-                    for e in diff:
-                        f.write(f'{e.size}|{e.size_diff}|{e.count}|{";".join(str(x) for x in e.traceback.format(5))}\n')
-                    # fname = f'memory-{util.now().isoformat().replace(':', '').replace('-', '')}.trace'
-                    # snapshot.dump(fname)
-                except Exception as err:
-                    logger.error('error in tracemallocry', exc_info=err)
-                else:
-                    logger.info('tracemalloc checkpoint')
-                last_snapshot = snapshot
+    try:
+        await util.thread_local.shutdown_event.wait()
+        logger.info(f'shutting down {observer}')
+        try:
+            await observer.shutdown()
+        finally:
+            logger.info(f'shutdown complete, stopping {observer}')
+            await observer.stop()
+    finally:
+        logger.info(f'{observer} exiting')
+        if TRACEMALLOC:
+            await tracemallocery.stop()
 
 
 def observe(
@@ -242,8 +255,8 @@ def observe(
                 observer = HFDLObserverNode(settings)
             try:
                 runner.run(async_observe(observer))
-            except asyncio.CancelledError:
-                logger.error('Observer loop cancelled')
+            except KeyboardInterrupt:
+                logger.error('Interrupted')
                 try:
                     runner.run(observer.shutdown())
                     runner.run(observer.stop())
@@ -298,12 +311,9 @@ def setup_logging(loghandler: Optional[logging.Handler], debug: bool = True) -> 
         exists=True,
     ), default=None,
 )
-@click.option('--trace', hidden=True, is_flag=True)
 def command(
-    headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path], trace: bool
+    headless: bool, debug: bool, node: bool, log: Optional[pathlib.Path], config: Optional[pathlib.Path]
 ) -> None:
-    global TRACEMALLOC
-    TRACEMALLOC = trace
 
     settings_path = config or (pathlib.Path(__file__).parent.parent / 'settings.yaml')
     try:
