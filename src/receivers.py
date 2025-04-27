@@ -264,7 +264,9 @@ class Web888ExecReceiver(Web888Receiver):
 
     def setup_harnesses(self) -> None:
         if not self.client:
-            self.client = iqsources.KiwiClientProcess(self.name, self.config.get('client', {}))
+            self.client = iqsources.KiwiClientProcess(
+                self.name, self.config.get('client', {}), int(self.config.get('channel_width', 12000))
+            )
         if not self.decoder:
             self.decoder = decoders.IQDecoderProcess(self.name, self.config.get('decoder', {}), self.listener)
 

@@ -15,6 +15,7 @@ from typing import AsyncGenerator, Optional
 
 import hfdl_observer.data
 import hfdl_observer.env as env
+import hfdl_observer.hfdl as hfdl
 import hfdl_observer.process as process
 import hfdl_observer.util as util
 
@@ -29,6 +30,7 @@ class KiwiClientCommand(process.Command):
 class KiwiClient:
     config: collections.abc.Mapping
     channel: Optional[hfdl_observer.data.ObservingChannel] = None
+    channel_width: int = 12000
 
     def __init__(self, name: str, config: collections.abc.MutableMapping):
         self.name = name
@@ -53,6 +55,7 @@ class KiwiClient:
         # python3 kiwirecorder.py --nc -s n4dkd.asuscomm.com -p 8901 --log info -f 8927 -m iq --tlimit 60 --user kiwi_nc
         # | dumphfdl --iq-file - --sample-rate 12000 --sample-format CS16 --read-buffer-size 9600 --centerfreq 8927 8927
         # find the executable.
+        pass_width = int(self.channel_width / 2)  # int((self.channel_width + hfdl.HFDL_CHANNEL_WIDTH * 1.5) / 2)
         args = [
             str(env.as_executable_path(self.config['recorder_path'])),
             '--nc',
@@ -61,7 +64,7 @@ class KiwiClient:
             '-p', str(self.config['port']),
             '-f', str(self.channel.center_khz),
             '-m', 'iq',
-            '-L', '-8000', '-H', '8000',
+            '-L', str(-pass_width), '-H', f'+{pass_width}',
             '--OV',
             '--user', self.config['username'],
         ]
@@ -77,9 +80,10 @@ class KiwiClient:
 class KiwiClientProcess(process.ProcessHarness, KiwiClient):
     pipe: util.Pipe
 
-    def __init__(self, name: str, config: collections.abc.MutableMapping):
+    def __init__(self, name: str, config: collections.abc.MutableMapping, channel_width: int = 12000):
         KiwiClient.__init__(self, name, config)
         process.ProcessHarness.__init__(self)
+        self.channel_width = channel_width
         self.settle_time = config.get('settle_time', 0) + random.randrange(1, 1000) / 1000.0
 
     def commandline(self) -> list[str]:

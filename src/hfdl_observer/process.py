@@ -207,7 +207,7 @@ class Command:
     # async def signal(self, sig: int, process: Optional[asyncio.subprocess.Process] = None, timeout: int = 5) -> None:
     async def signal(self, sig: int, process: Optional[subprocess.Popen] = None, timeout: int = -1) -> None:
         if timeout < 0:
-            timeout = 1 if util.is_shutting_down else 3
+            timeout = 1 if util.is_shutting_down() else 3
         execution_event = self.execution_event
         process = process or self.process
         if process and execution_event and not execution_event.is_set():
