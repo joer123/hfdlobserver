@@ -17,6 +17,7 @@ from typing import Any, AsyncGenerator, Awaitable, MutableMapping, Optional
 
 import hfdl_observer.bus as bus
 import hfdl_observer.data as data
+import hfdl_observer.messaging as messaging
 import hfdl_observer.process as process
 import hfdl_observer.util as util
 
@@ -31,14 +32,13 @@ class ReceiverError(Exception):
     pass
 
 
-class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMessageDispatcher):
+class LocalReceiver(bus.EventNotifier, data.ChannelObserver, messaging.GenericSubscriber):
     frequencies: list[int]
     name: str
     tasks: list[asyncio.Task]
     conductor: Optional[str] = None
     last_seen: datetime.datetime
     registered: bool = False
-    broker: util.Broker
 
     def __init__(self, name: str, config: collections.abc.MutableMapping) -> None:
         self.uuid = str(uuid.uuid4())
@@ -47,13 +47,9 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
         self.logger = logger.getChild(self.name)
         self.frequencies = []
         self.last_seen = util.now()
-        # subscriptions occur on one broker only. Local is preferred.
-        self.broker: util.Broker = bus.LOCAL_BROKER or bus.REMOTE_BROKER
-        self.recipient_subscriber = self.broker.subscriber(self.target)
-        self.recipient_subscriber.add_callback(self.on_remote_event)
-        self.broadcast_subscriber = self.broker.subscriber('/')
-        self.broadcast_subscriber.add_callback(self.on_remote_event, lambda m: m.subject.startswith('available'))
-        self.broadcast_subscriber.add_callback(self.on_remote_event, lambda m: m.subject.startswith('unavailable'))
+        messaging.subscribe(self, self.target)
+        messaging.subscribe(self, '/', 'available')
+        messaging.subscribe(self, '/', 'unavailable')
         self.watchdog = bus.PeriodicCallback(60, [self.heartbeat], chatty=False)
         super().__init__()
 
@@ -69,7 +65,7 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
     def target(self) -> str:
         return f'@receiver+{self.name}'
 
-    def on_remote_listen(self, message: bus.Message) -> None:
+    def on_remote_listen(self, message: messaging.Message) -> None:
         self.keepalive()
         if (message.target == self.target):
             payload: list[int] = message.payload
@@ -77,19 +73,19 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
         else:
             logger.info(f"{self.target} told to listen to {message.target}'s frequencies")
 
-    def on_remote_registered(self, message: bus.Message) -> None:
+    def on_remote_registered(self, message: messaging.Message) -> None:
         self.keepalive()
         uuid: str = message.payload
         if uuid == self.uuid:
             self.registered = True
 
-    def on_remote_deregistered(self, message: bus.Message) -> None:
+    def on_remote_deregistered(self, message: messaging.Message) -> None:
         self.keepalive()
         uuid: str = message.payload
         if uuid == self.uuid:
             self.deregistered()
 
-    def on_remote_ping(self, message: bus.Message) -> None:
+    def on_remote_ping(self, message: messaging.Message) -> None:
         if isinstance(message.payload, str):
             uuid: str = message.payload
             requester: str = str(self.conductor)
@@ -98,18 +94,18 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
             uuid = message.payload['dst']
         if uuid == self.uuid:
             self.keepalive()
-            self.broker.publish_soon(bus.Message(self.target, 'pong', self.payload(to=requester, src=self.uuid)))
+            messaging.publish_soon(messaging.Message(self.target, 'pong', self.payload(to=requester, src=self.uuid)))
         else:
             # observer is confused. Thinks another node is us. Reregister to clear it up.
             # This could cause flapping if there are two nodes with the same name actively running and registering.
             self.register()
 
-    def on_remote_die(self, _: bus.Message) -> None:
+    def on_remote_die(self, _: messaging.Message) -> None:
         # self.keepalive()
         logger.warning(f'{self} received DIE order')
         self.deregister()
 
-    def on_remote_available(self, message: bus.Message) -> None:
+    def on_remote_available(self, message: messaging.Message) -> None:
         if self.registered and message.payload['name'] == self.conductor:
             self.keepalive()
         else:
@@ -118,19 +114,17 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
             self.listener = data.ListenerConfig(payload['listener'])
             self.register()
 
-    def on_remote_unavailable(self, _: bus.Message) -> None:
+    def on_remote_unavailable(self, _: messaging.Message) -> None:
         self.deregister()
 
     def on_observer_start(self) -> None:
-        self.recipient_subscriber.start()
-        self.broadcast_subscriber.start()
         self.watchdog.start()
 
     def register(self) -> None:
         if self.conductor is not None:
             self.setup_harnesses()
-            self.broker.publish_soon(
-                bus.Message(
+            messaging.publish_soon(
+                messaging.Message(
                     self.conductor,
                     'register',
                     self.payload(
@@ -143,7 +137,7 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
     def deregister(self) -> None:
         if self.conductor:
             logger.info(f'{self} deregistering')
-            self.broker.publish_soon(bus.Message(self.conductor, 'deregister', self.payload()))
+            messaging.publish_soon(messaging.Message(self.conductor, 'deregister', self.payload()))
             task = util.schedule(self.stop())
             task.add_done_callback(self.deregistered)
 
@@ -203,7 +197,7 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, bus.GenericRemoteMe
             self.publish_listening()
 
     def publish_listening(self) -> None:
-        self.broker.publish_soon(bus.Message(self.target, 'listening', self.payload(frequencies=self.frequencies)))
+        messaging.publish_soon(messaging.Message(self.target, 'listening', self.payload(frequencies=self.frequencies)))
 
     async def stop(self) -> None:
         pass
@@ -461,9 +455,6 @@ class ReceiverNode():
         self.config = config
         self.local_receivers = []
 
-    def message_broker(self) -> bus.RemoteBroker:
-        raise NotImplementedError(self.__class__.__name__)
-
     def build_local_receiver(self, receiver_config: MutableMapping) -> LocalReceiver:
         typename = receiver_config['type']
         klass = globals()[typename]
@@ -487,6 +478,3 @@ class ReceiverNode():
 
     def on_fatal_error(self, _: Any) -> None:
         pass
-
-    def is_receiver_managed(self, name: str) -> bool:
-        return name in [lr.name for lr in self.local_receivers]

@@ -33,11 +33,13 @@ Message = util.Message
 class ZeroBroker:
     # feeling cute, might delete later.
     thread: Optional[threading.Thread] = None
+    initialised: threading.Event
 
     def __init__(self, host: str = '*', pub_port: int = 5559, sub_port: int = 5560) -> None:
         self.host = host
         self.pub_port = pub_port
         self.sub_port = sub_port
+        self.initialised = threading.Event()
 
     def run(self) -> None:
         context = zmq.Context()
@@ -52,6 +54,7 @@ class ZeroBroker:
         xsub.bind(f"tcp://{self.host}:{self.pub_port}")
 
         try:
+            self.initialised.set()
             zmq.proxy(xpub, xsub)
         finally:
             xpub.close(0)
@@ -64,14 +67,13 @@ class ZeroBroker:
             self.thread.start()
 
 
-class ZeroSubscriber(util.Subscriber):
+class ZeroSubscriber:
     url: str
     channel: str
     context: Context
     socket: Optional[zmq.Socket] = None
 
     def __init__(self, url: str, channel: str, context: Optional[zmq.asyncio.Context] = None):
-        util.Subscriber.__init__(self)
         self.context = get_thread_context()
         self.channel = channel
         self.url = url
@@ -98,13 +100,22 @@ class ZeroSubscriber(util.Subscriber):
                 header, body = parts
                 payload = json.loads(body.decode())
                 target, subject = header.decode().split('|', 1)
-                message = Message(target=target, subject=subject, payload=payload)
+                try:
+                    sender = payload.get('sender', None)
+                    payload = payload.get('payload', payload)
+                except AttributeError:
+                    logger.info(f'no sender found in {payload!r}')
+                    sender = None
+                message = Message(target=target, subject=subject, payload=payload, sender=sender)
                 self.receive(message)
         except asyncio.CancelledError:
             pass
         finally:
             logger.debug(f'no longer subscribed to {self.url}/{self.channel}')
-            util.schedule(self.stop())
+            util.call_soon(self._stop)
+
+    def receive(self, message: Message) -> None:
+        logger.debug(f'received {message}')
 
     def _stop(self) -> None:
         self.running = False
@@ -144,7 +155,11 @@ class ZeroPublisher:
         return self.socket is not None
 
     async def publish(self, message: Message) -> None:
-        await self._publish(f'{message.target}|{message.subject}', json.dumps(message.payload))
+        payload = {
+            'payload': message.payload,
+            'sender': message.sender,
+        }
+        await self._publish(f'{message.target}|{message.subject}', json.dumps(payload))
 
     async def multi_publish(self, targets: list[str], subject: str, payload: Any) -> None:
         json_payload = json.dumps(payload)

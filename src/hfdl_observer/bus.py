@@ -6,171 +6,16 @@
 
 import asyncio
 import collections
-import functools
 import json
 import logging
 import pathlib
-import weakref
 
 from typing import Any, AsyncGenerator, Callable, Optional, Union
 
 import requests
 
 import hfdl_observer.util as util
-import hfdl_observer.zero as zero
-
-Message = util.Message
 logger = logging.getLogger(__name__)
-
-
-class LocalSubscriber(util.Subscriber):
-    def start(self) -> asyncio.Task:
-        # return a noop task
-        return util.schedule(asyncio.sleep(0.1))
-
-    def _stop(self) -> None:
-        pass
-
-
-class TopicSubscriber:
-    topic: str
-    subscriber: weakref.ReferenceType[util.Subscriber]
-
-    def __init__(self, subscriber: util.Subscriber, topic: str = '') -> None:
-        self.topic = topic
-        self.subscriber = weakref.ref(subscriber)
-
-    def receive(self, message: Message) -> bool:
-        subscriber = self.subscriber()
-        if subscriber is not None:
-            subscriber.receive(message)
-        return subscriber is not None
-
-    def is_subscribed(self, topic: str) -> bool:
-        return self.topic == '' or topic.startswith(self.topic)
-
-
-class LocalBroker(util.Publisher, util.Broker):
-
-    subscribers: list[TopicSubscriber]
-
-    def __init__(self) -> None:
-        self.subscribers = []
-
-    def subscribe(self, subscriber: util.Subscriber, topic: str = '') -> None:
-        self.subscribers.append(TopicSubscriber(subscriber, topic))
-
-    def subscriber(self, topic: str = '') -> util.Subscriber:
-        subscriber = LocalSubscriber()
-        self.subscribe(subscriber, topic)
-        return subscriber
-
-    def publisher(self) -> util.Publisher:
-        return self
-
-    async def publish(self, message: Message) -> None:
-        dead = []
-        topic = f'{message.target}|{message.subject}'
-        logger.debug(f'publish {topic}')
-        for subscriber in self.subscribers:
-            if subscriber.is_subscribed(topic):
-                if not subscriber.receive(message):
-                    dead.append(subscriber)
-        for dead_subscriber in dead:
-            self.subscribers.remove(dead_subscriber)
-
-
-LOCAL_BROKER: None | LocalBroker = None
-
-
-class RemotePublisher(zero.ZeroPublisher, util.Publisher):
-    pass
-
-
-class RemoteSubscriber(zero.ZeroSubscriber):
-    task: asyncio.Task
-
-    def start(self) -> asyncio.Task:
-        self.task = util.schedule(self.run())
-        return self.task
-
-
-class RemoteBroker(util.Broker):
-    def __init__(self, config: dict) -> None:
-        if not config:
-            # with no config, this becomes a dummy
-            self.configured = False
-            return
-        self.host = config.get('host', 'localhost')
-        self.pub_port = config.get('pub_port', 5559)
-        self.sub_port = config.get('sub_port', 5560)
-        self.context = zero.get_thread_context()
-        self._publisher = self.publisher()
-        self.configured = True
-
-    def subscriber(self, target: str) -> util.Subscriber:
-        url = f'tcp://{self.host}:{self.sub_port}'
-        logger.debug(f'subscriber {url}/{target}')
-        return RemoteSubscriber(url, target, context=self.context)
-
-    def publisher(self) -> util.Publisher:
-        logger.debug(f'publisher {self.host}:{self.pub_port}')
-        return RemotePublisher(self.host, self.pub_port, context=self.context)
-
-    async def publish(self, message: Message) -> None:
-        if not hasattr(self, '_publisher'):  # race condition if we're asked to publish before we're initialized.
-            return None
-        try:
-            logger.debug(f'queuing {message}')
-            await self._publisher.publish(message)
-        except AttributeError:
-            logger.debug(f'dropping {message}')
-        return None
-
-
-class NullBroker(RemoteBroker):
-    def __init__(self) -> None:
-        super().__init__({})
-
-
-class GenericRemoteMessageDispatcher:
-
-    def __init__(self) -> None:
-        # this ties the cache to the instance. If decorating directly, instances are not necessarily GCd. ever.
-        self.get_remote_handler = functools.cache(self.get_remote_handler)  # type: ignore[method-assign]
-
-    def get_remote_handler(self, name: str) -> None | Callable:
-        return getattr(self, f'on_remote_{name.strip()}', None)
-
-    def on_remote_event(self, message: Message) -> None:
-        handler = self.get_remote_handler(message.subject)
-        if callable(handler):
-            logger.debug(f'dispatching {message} via {handler}')
-            handler(message)
-        else:
-            pass
-            # logger.debug(f'ignoring on_remote_{message.subject.strip()}')
-
-
-REMOTE_BROKER: RemoteBroker = NullBroker()
-
-
-def brokers() -> list[util.Broker]:
-    brokers: list[util.Broker] = []
-    if LOCAL_BROKER is not None:
-        brokers.append(LOCAL_BROKER)
-    if REMOTE_BROKER is not None and REMOTE_BROKER.configured:
-        brokers.append(REMOTE_BROKER)
-    return brokers
-
-
-async def publish(message: Message) -> None:
-    for broker in brokers():
-        await broker.publish(message)
-
-
-def publish_soon(message: Message) -> None:
-    util.schedule(publish(message))
 
 
 class EventNotifier:
@@ -186,8 +31,8 @@ class EventNotifier:
 
     def notify_event(self, subject: str, body: Any) -> None:
         loop = asyncio.get_event_loop()
-        for subscriber in (self._watchers or {}).get(subject, []):
-            loop.call_soon(subscriber, body)
+        for watcher in (self._watchers or {}).get(subject, []):
+            loop.call_soon(watcher, body)
 
 
 class JSONWatcher(EventNotifier):

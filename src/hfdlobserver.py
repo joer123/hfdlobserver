@@ -26,6 +26,7 @@ import hfdl_observer.heat
 import hfdl_observer.hfdl
 import hfdl_observer.listeners
 import hfdl_observer.manage as manage
+import hfdl_observer.messaging as messaging
 import hfdl_observer.network as network
 import hfdl_observer.settings
 import hfdl_observer.util as util
@@ -167,9 +168,6 @@ class HFDLObserverController(manage.ConductorNode, receivers.ReceiverNode):
         self.local_receivers = []
         await asyncio.gather(*awaitables, return_exceptions=True)
 
-    def is_receiver_managed(self, name: str) -> bool:
-        return receivers.ReceiverNode.is_receiver_managed(self, name)
-
 
 class TraceMallocery(bus.PeriodicTask):
     def prepare(self) -> None:
@@ -227,8 +225,7 @@ def observe(
     key = 'observer' if as_controller else 'node'
     settings = getattr(hfdl_observer.settings, key)
     broker_config = settings.get('messaging', {})
-    remote_broker = bus.RemoteBroker(broker_config)
-    bus.REMOTE_BROKER = remote_broker  # this might be a bit of a hack...
+    remote_broker = messaging.RemoteBroker(broker_config)
 
     observer: HFDLObserverController | HFDLObserverNode
 
@@ -238,10 +235,11 @@ def observe(
             util.thread_local.runner = runner
 
             if as_controller:
-                local_broker = bus.LocalBroker()
-                bus.LOCAL_BROKER = local_broker
                 message_broker = zero.ZeroBroker(**broker_config)
                 message_broker.start()  # daemon thread, not async.
+                logger.info('waiting for remote broker')
+                message_broker.initialised.wait()
+                messaging._BROKER.set_remote_broker(remote_broker)
                 network.UPDATER = orm.NetworkUpdater()
                 observer = HFDLObserverController(settings)
                 cumulative = network.CumulativePacketStats()
@@ -253,6 +251,7 @@ def observe(
                     observer.network_overview.watch_event('state', observer.ministats)
             else:  # just a node for receivers.
                 observer = HFDLObserverNode(settings)
+                messaging._BROKER.set_remote_broker(remote_broker)
             try:
                 runner.run(async_observe(observer))
             except KeyboardInterrupt:

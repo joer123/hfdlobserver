@@ -20,6 +20,7 @@ import select
 import sys
 import termios
 import threading
+import uuid
 
 from typing import Any, AsyncGenerator, Callable, Coroutine, IO, Union
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 thread_local = threading.local()
 thread_local.shutdown_event = asyncio.Event()
 thread_local.loop = None
+MESSAGING_NODE_ID = uuid.uuid4().int
 
 
 def tobool(val: Union[bool, str, int]) -> bool:
@@ -371,6 +373,7 @@ class Message:
     target: str
     subject: str
     payload: Any
+    sender: int = MESSAGING_NODE_ID
 
     def __str__(self) -> str:
         body: str
@@ -380,53 +383,4 @@ class Message:
             body = self.payload.__class__.__name__
             if hasattr(self.payload, '__len__'):
                 body = f'{body} l={len(self.payload)}'
-        return f'<Message: t={self.target} s={self.subject} b={body}>'
-
-
-class Publisher:
-    async def publish(self, message: Message) -> None:
-        raise NotImplementedError(self.__class__.__name__)
-
-
-class Subscriber:
-    callbacks: list[tuple[None | Callable[[Message], bool], Callable[[Message], None]]]
-
-    def __init__(self) -> None:
-        self.callbacks = []
-
-    def add_callback(
-        self, callback: Callable[[Message], None], filter: None | Callable[[Message], bool] = None
-    ) -> None:
-        self.callbacks.append((filter, callback))
-
-    def receive(self, message: Message) -> None:
-        logged = False
-        for filter, callback in self.callbacks:
-            if not filter or filter(message):
-                if not logged:
-                    # logger.debug(f'accepted {message}')
-                    logged = True
-                call_soon(callback, message)
-
-    def start(self) -> asyncio.Task:
-        raise NotImplementedError(self.__class__.__name__)
-
-    async def stop(self) -> None:
-        self._stop()
-
-    def _stop(self) -> None:
-        raise NotImplementedError(self.__class__.__name__)
-
-
-class Broker:
-    def subscriber(self, target: str) -> Subscriber:
-        raise NotImplementedError(self.__class__.__name__)
-
-    def publisher(self) -> Publisher:
-        raise NotImplementedError(self.__class__.__name__)
-
-    async def publish(self, message: Message) -> None:
-        raise NotImplementedError(self.__class__.__name__)
-
-    def publish_soon(self, message: Message) -> None:
-        schedule(self.publish(message))
+        return f'<Message: t={self.target} s={self.subject} b={body} f={self.sender}>'
