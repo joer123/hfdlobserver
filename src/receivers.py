@@ -161,6 +161,12 @@ class LocalReceiver(bus.EventNotifier, data.ChannelObserver, messaging.GenericSu
             if self.last_seen < horizon:
                 logger.warning(f'controller {self.conductor} may be dead. {self.last_seen}')
                 self.deregister()
+        if not self.is_running():
+            util.schedule(self.maybe_stop())
+
+    async def maybe_stop(self) -> None:
+        if not self.is_running():
+            await self.stop()
 
     def covers(self, freqs: list[int]) -> bool:
         # in this implementation it must be exact.

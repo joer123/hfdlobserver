@@ -116,6 +116,8 @@ class Command:
             yield CommandState('preparing')
             self.logger.debug('gathering options')
             exec_args: dict[str, Any] = {
+                'stdin': subprocess.DEVNULL,
+                'stdout': subprocess.DEVNULL,
                 'stderr': subprocess.PIPE
             }
             exec_args.update(self.execution_arguments)

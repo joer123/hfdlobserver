@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import json
 import logging
 import threading
@@ -18,26 +17,7 @@ logger = logging.getLogger(__name__)
 QueueShutDown = getattr(asyncio, 'QueueShutDown', asyncio.QueueEmpty)
 
 
-@dataclasses.dataclass
-class Message:
-    target: str
-    subject: str
-    payload: Any
-
-    def __str(self) -> str:
-        body: str
-        if isinstance(self.payload, str):
-            body = self.payload
-        else:
-            body = self.payload.__class__.__name__
-            if hasattr(self.payload, '__len__'):
-                body = f'{body} l={len(self.payload)}'
-        return f'<Message: t={self.target} s={self.subject} b={body}>'
-
-    def as_data(self) -> bytes:
-        body = json.dumps(self.payload)
-        data = f'{self.target}|{self.subject}|{body}'
-        return data.encode()
+Message = util.Message
 
 
 class NanoSubscriber:

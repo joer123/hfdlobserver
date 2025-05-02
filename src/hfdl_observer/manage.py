@@ -321,6 +321,8 @@ class UniformOrchestrator(AbstractOrchestrator):
         logger.debug(f'Receivers: {list(p.name for p in ordered_proxies)}')
         available = ordered_proxies.copy()
         for channel in channels:
+            if not channel.frequencies:
+                continue
             for receiver in ordered_proxies:
                 if receiver.covers(channel):
                     logger.debug(f'keeping {receiver}')
@@ -351,6 +353,7 @@ class UniformOrchestrator(AbstractOrchestrator):
                 logger.info(f'available left\n{EOL.join(str(a) for a in available)}')
                 logger.info(f'keeps\n{EOL.join(str(a) for a in keeps.values())}')
                 logger.info(f'starts\n{EOL.join(str(s) for s in starts)}')
+                self.maybe_describe_receivers(force=True)
 
     def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
         self.validate_proxies()
@@ -368,6 +371,9 @@ class UniformOrchestrator(AbstractOrchestrator):
             if not proxy.recently_alive():
                 logger.warning(f'proxy {proxy.name}:{proxy} is dead. Removing.')
                 self.remove_receiver(proxy)
+
+    def maybe_describe_receivers(self, *_: Any, force: bool = False) -> None:
+        raise NotImplementedError(self.__class__.__name__)
 
 
 class DiverseOrchestrator(UniformOrchestrator):
@@ -476,6 +482,11 @@ class ConductorNode(bus.EventNotifier, messaging.GenericSubscriber):
         self.announcer = bus.PeriodicCallback(10, [self.announce], False)
         self.watchdog = bus.PeriodicCallback(30, [self.heartbeat], chatty=False)
         self.last_orchestrated = util.now()
+        # hackish.
+        self.conductor.maybe_describe_receivers = self.maybe_describe_receivers
+
+    def maybe_describe_receivers(self, *_: Any, force: bool = False) -> None:
+        raise NotImplementedError(self.__class__.__name__)
 
     def announce(self) -> None:
         messaging.publish_soon(messaging.Message(

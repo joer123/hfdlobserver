@@ -92,23 +92,19 @@ class KiwiClientProcess(process.ProcessHarness, KiwiClient):
     def execution_arguments(self) -> dict:
         return {
             'stdout': self.pipe.write,
-            'stdin': self.nullpipe.read,
-            'close_fds': False,
+            'pass_fds': (self.pipe.write,),
         }
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
         self.channel = channel
         logger.debug(f'{self} starting {channel}')
         if self.channel and self.channel.frequencies:
-            with util.Pipe() as nullpipe:
-                self.nullpipe = nullpipe
-                async with util.aclosing(self.run()) as lifecycle:
-                    async for current_state in lifecycle:
-                        match current_state.event:
-                            case 'running':
-                                self.pipe.close_write()
-                                nullpipe.close_read()
-                        yield current_state
+            async with util.aclosing(self.run()) as lifecycle:
+                async for current_state in lifecycle:
+                    match current_state.event:
+                        case 'running':
+                            self.pipe.close_write()
+                    yield current_state
 
     def create_command(self) -> KiwiClientCommand:
         cmd = self.commandline()

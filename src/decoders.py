@@ -107,10 +107,6 @@ class Dumphfdl(BaseDecoder):
                 f'decoded:{out.get("format", "json")}:{out["protocol"]}:address={out["address"]},port={out["port"]}'
             ])
 
-        # console logging, unless told not to
-        if not self.config.get('quiet', False):
-            cmd.extend(['--output', 'decoded:text:file:path=/dev/stdout',])
-
         # packet logging, rotated daily (if configured)
         try:
             packetlog = env.as_path(self.config['packetlog'])
@@ -158,6 +154,7 @@ class IQDecoderProcess(process.ProcessHarness, IQDecoder):
     def execution_arguments(self) -> dict:
         return {
             'stdin': self.pipe.read,
+            'pass_fds': (self.pipe.read,),
         }
 
     async def listen(self, channel: hfdl_observer.data.ObservingChannel) -> AsyncGenerator:
