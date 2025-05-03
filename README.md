@@ -2,7 +2,7 @@
 
 A multi-headed dumphfdl receiver for use with Web-888 devices and other SoapySDR-compatible receivers.
 
-[!IMPORTANT]
+> [!IMPORTANT]
 > If you are currently using a version from this repository when the main script was called `hfdlobserver888.sh`, see the next to last section of this document: *Upgrading from HFDLObserver888* for important information. This version is not directly compatible with the settings and environment of the `HFDLObserver888.sh` installation. You will have to perform a migration step.
 
 
