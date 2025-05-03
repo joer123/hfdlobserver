@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 if [[ "${1}" == '--help' ]] ; then
     echo 'This script is only needed if you installed this application while it was known as "hfdlobserver888".'
-    echo 'It installs additional dependencies, patches the settings.yaml file, and provides a backwards compatible link for'
-    echo 'the main script.'
+    echo 'It installs additional dependencies, and provides a backwards compatible link for the main script.'
     echo ' '
     echo 'The app should not need to alter any systemd service files, or the name of the install directory.'
+    echo ' '
+    echo 'You will need to reconfigure the settings.yaml file for the new configuration structure. If you have a'
+    echo 'simple installation, running "./hfdlobserver.sh configure", then copying the new configuration file over the'
+    echo 'old one should be sufficient. If you have custom configuration, you will have to port that over manually.'
+    echo 'Join the HFDL channel on the Airframes Discord (https://discord.gg/airframes) if you need assistance.'
+    echo 'The changes are not complicated, but are not automated.'
     exit 0;
 fi
 
@@ -29,12 +34,14 @@ sudo apt install sqlite3
 echo "updating Python dependencies"
 pip install -r requirements.txt
 
-if [[ -r "settings.yaml" ]] ; then
-    echo "ensuring settings key is updated in default settings.yaml"
-    sed -i.orig -e "s/^observer888:/observer:/" "settings.yaml"
-fi
 if [[ ! -r "hfdlobserver888.sh" ]] ; then
     echo "installing backwards compatible symlink"
     ln -s "hfdlobserver.sh" "hfdlobserver888.sh"
 fi
-echo 'Migration tasks completed. You should restart `hfdlobserver.sh` in case there are any peculiarities of your install that need addressing.'
+echo 'Migration tasks completed.'
+echo ' '
+echo 'You may need to reconfigure the settings.yaml file for the new configuration structure. If you have a'
+echo 'simple installation, running "./hfdlobserver.sh configure", then copying the new configuration file over the'
+echo 'old one should be sufficient. If you have custom configuration, you will have to port that over manually.'
+echo 'Join the HFDL channel on the Airframes Discord (https://discord.gg/airframes) if you need assistance.'
+echo 'The changes are not complicated, but are not automated.'

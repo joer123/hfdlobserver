@@ -2,6 +2,10 @@
 
 A multi-headed dumphfdl receiver for use with Web-888 devices and other SoapySDR-compatible receivers.
 
+[!IMPORTANT]
+> If you are currently using a version from this repository when the main script was called `hfdlobserver888.sh`, see the next to last section of this document: *Upgrading from HFDLObserver888* for important information. This version is not directly compatible with the settings and environment of the `HFDLObserver888.sh` installation. You will have to perform a migration step.
+
+
 ## Background
 
 The dynamism of the High Frequency Data Link infrastructure poses some problems for those trying to efficiently monitor these packets. There are a wide variety of frequencies in use across the HF spectrum (in this case, between 2.5 and 22MHz). The active frequencies change depending on time of day, ionospheric conditions, and the associated ground station. Picking the correct frequencies, and switching between them is a challenge. This challenge is magnified as many available SDRs have limited sample rates, and cannot scan the entire available HFDL frequency space.
@@ -20,7 +24,7 @@ HFDLObserver helps with these problems by managing frequency assignments for an 
 
 Optionally, it can also retrieve updated frequency lists from community source (such as hfdl.observer or airframes.io). This covers periods where squitters (frequency updates) may not be received by your station for a time.
 
-In general, there are around 30 frequencies active globally at a given time. 
+In general, there are around 30 frequencies active globally at a given time.
 
 ### Web-888 receivers
 
@@ -61,6 +65,9 @@ As mentioned above, this is a great wideband SDR receiver. Its Linux driver supp
 ## Advanced Features
 
 HFDLObserver is evolving software. As such, it has some more advanced features that are in various stages of stability, and which generally require more expert handling for the time being. If you want to try to use one of these, drop by the [Airframes.io](https://airframes.io) Discord, in the "#𝐇𝐅〉hfdl" channel.
+
+Additional topics, such as details of most of the available settings can be found in the [Advanced Topics](extras/advanced-settings.md) documentation.
+
 
 ### Other SoapySDR devices
 
@@ -113,6 +120,23 @@ The next line provides an overview of the total stats since the app started.
 - 📶 total number of packets
 
 
+### Command Keys
+
+The HFDLObserver CUI allows limited control of the display at runtime with a few keystrokes:
+
+- `[,]` - previous display mode
+- `[.]` - next display mode
+- `[-]` - bin size -60s
+- `[+]` - bin size +60s
+- `[1]` - frequency display
+- `[2]` - band display
+- `[3]` - station display
+- `[4]` - agent display
+- `[5]` - receiver display
+- `[h]` - this help
+- `[q]` or `[^C]` - quit
+
+
 ## Setting up the Web-888
 
 To start, follow the [basic set up instructions](https://www.rx-888.com/web/guide/requirements.html) on the Web-888 site. You'll need to put the ROM image on a micro-SD card. There's little activity and little use of space, so you should not go overboard on a card (in fact, don't use anything 32GB or larger, as the device will be unable to read it).
@@ -143,8 +167,8 @@ There are only a few settings that are of interest.
 Installation can be performed on `apt`-equipped systems (Debian, Ubuntu, Armbian, etc.) by using the provided `install.sh` command. The installation requires `sudo` access so that it can install packages and dependencies.
 
 ```
-$ git clone https://github.com/hfdl-observer/hfdlobserver888
-$ cd hfdlobserver888
+$ git clone https://github.com/hfdl-observer/hfdlobserver
+$ cd hfdlobserver
 $ ./install.sh
 ```
 
@@ -217,7 +241,21 @@ If you want to run this as a service, you can run the script to install the serv
 $ extras/install-service.sh
 ```
 
-It then becomes a normal service named `hfdlobserver888`. Following the usual pattern, there is a very minor ability to configure it via `/etc/default/hfdlobserver888`, but most items are managed through the `settings.yaml` file.
+It then becomes a normal service named `hfdlobserver`. Following the usual pattern, there is a very minor ability to configure it via `/etc/default/hfdlobserver`, but most items are managed through the `settings.yaml` file.
+
+
+## Upgrading from HFDLObserver888
+
+The original versions of HFDLObserver (as `HFDLObserver888`) use a different structure for settings. Additionally, this new version adds some dependencies. If you are using the older version and want to update (recommended!) you need to perform a couple of steps
+
+1. **save your original `settings.yaml` some place, just in case.**
+2. stop any current `hfdlobserver888` instances that are running on the machine.
+3. `cd` into the install directory.
+4. use `git pull` to update the code.
+5. run `extras/migrate-from-888.sh`
+6. run `./hfdlobserver.sh configure`
+7. copy `settings.yaml.new` to `settings.yaml` (if you have been using a simple setup)
+8. run `./hfdlobserver.sh` to enjoy the new code.
 
 
 ## Acknowledgements

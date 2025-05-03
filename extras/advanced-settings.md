@@ -2,6 +2,7 @@
 
 - Settings
 - Abbreviated Settings Examples
+- Running as a Traffic Viewer (tbd)
 - Running as a Remote "node" (tbd)
 
 ## Settings
@@ -190,7 +191,7 @@ cui:
 
 ### receivers
 
-This section defines the types of receivers that can be added in `observer` `local_receivers`. Any setting specified in the template can be overridden for a specific receiver, but its "path" has to match. There are examples of this in the **Abbreviated Settings Examples** section.
+This section defines the types of receivers that can be added in `observer` § `local_receivers`. Any setting specified in the template can be overridden for a specific receiver, but its "path" has to match. There are examples of this in the **Abbreviated Settings Examples** section.
 
 Each receiver template is defined in its own subsection, with a unique name. A receiver always includes a `decoder` section, that represents configuration for managing (and running) dumphfdl. Some *types* of Receiver also add a `client` section. This is used for `web-888` receivers, since they need a separate process to stream the IQ data from the device to the decoder/dumphfdl.
 
@@ -576,6 +577,10 @@ observer:
         port: 9012
 ...
 ```
+
+## Running as a Traffic Viewer (tbd)
+
+TBD
 
 ## Running as a remote "node"
 
