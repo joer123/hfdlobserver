@@ -355,6 +355,11 @@ class UniformOrchestrator(AbstractOrchestrator):
                 logger.info(f'starts\n{EOL.join(str(s) for s in starts)}')
                 self.maybe_describe_receivers(force=True)
 
+        for receiver in available:
+            # idle receivers!
+            logger.info(f'receiver {receiver} becomes idle.')
+            receiver.listen([])
+
     def orchestrate(self, targetted: dict[int, list[int]], fill_assigned: bool = False) -> list[data.ObservingChannel]:
         self.validate_proxies()
         if not self.proxies:
@@ -483,7 +488,7 @@ class ConductorNode(bus.EventNotifier, messaging.GenericSubscriber):
         self.watchdog = bus.PeriodicCallback(30, [self.heartbeat], chatty=False)
         self.last_orchestrated = util.now()
         # hackish.
-        self.conductor.maybe_describe_receivers = self.maybe_describe_receivers
+        self.conductor.maybe_describe_receivers = self.maybe_describe_receivers  # type: ignore[method-assign]
 
     def maybe_describe_receivers(self, *_: Any, force: bool = False) -> None:
         raise NotImplementedError(self.__class__.__name__)
