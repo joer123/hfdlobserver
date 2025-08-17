@@ -165,7 +165,7 @@ defaults: dict[str, Any] = {
             "pub_port": 5559,
             "sub_port": 5560,
         },
-        "local_receivers": [{'receiver': 'web888', 'name': f'web888-{i:02}'} for i in range(1, 14)]
+        "local_receivers": [{'receiver': 'web888', 'name': f'web888-{i:02}'} for i in range(1, 8)]
     },
     "cui": {
         "ticker": {
